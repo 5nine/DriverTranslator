@@ -951,10 +951,11 @@ async def handle_client(
                         # Only video breakaway affects AMX in our model
                         if kind == "video" and tx_obj is not None:
                             try:
+                                # rx_aliases are already validated above; use direct map for safety.
                                 await asyncio.gather(
                                     *(
                                         amx.set_stream(
-                                            decoder_ip=_lookup_rx(cfg, a).amx_decoder_ip,  # type: ignore[arg-type]
+                                            decoder_ip=cfg.rx_by_alias[a].amx_decoder_ip,
                                             stream=tx_obj.amx_stream,
                                         )
                                         for a in rx_aliases
