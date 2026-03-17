@@ -1044,6 +1044,8 @@ async def _handle_matrix_set(cfg: Config, amx: Any, cmd: str) -> Tuple[bool, str
     parts = cmd.split()
     if len(parts) < 4:
         return False, "unknown command"
+    if parts[0].lower() != "matrix" or parts[1].lower() != "set":
+        return False, "unknown command"
 
     tx_token = parts[2]
     rx_tokens = parts[3:]
@@ -1171,9 +1173,10 @@ async def handle_client(
                 continue
 
             LOG.info("RTI -> %s", line)
+            lower = line.lower()
 
             # Handle known commands.
-            if line.startswith("matrix set "):
+            if lower.startswith("matrix set "):
                 try:
                     ok, resp = await _handle_matrix_set(cfg, amx, line)
                     if ok:
@@ -1201,10 +1204,10 @@ async def handle_client(
                 continue
 
             # Breakaway switching
-            if line.startswith("matrix ") and " set " in line:
+            if lower.startswith("matrix ") and " set " in lower:
                 parts = line.split()
                 # matrix <kind> set <TX|NULL> <RX...>
-                if len(parts) >= 5 and parts[0] == "matrix" and parts[2] == "set":
+                if len(parts) >= 5 and parts[0].lower() == "matrix" and parts[2].lower() == "set":
                     kind = parts[1].lower()
                     tx_token = parts[3]
                     rx_tokens = parts[4:]
@@ -1258,12 +1261,12 @@ async def handle_client(
                         continue
 
             # Matrix query commands used for RTI feedback variables
-            if line.startswith("matrix ") and " get" in line:
+            if lower.startswith("matrix ") and " get" in lower:
                 parts = line.split()
                 # Examples:
                 # matrix video get [<RX...>]
                 # matrix audio get [<RX...>]
-                if len(parts) >= 3 and parts[0] == "matrix" and parts[2] == "get":
+                if len(parts) >= 3 and parts[0].lower() == "matrix" and parts[2].lower() == "get":
                     kind = parts[1].lower()
                     rx_tokens = parts[3:]
                     rx_aliases: List[str] = []
@@ -1301,23 +1304,23 @@ async def handle_client(
                     await writer.drain()
                     continue
 
-            if line.startswith("config set session alias "):
+            if lower.startswith("config set session alias "):
                 parts = line.split()
-                if len(parts) == 5 and parts[4] in ("on", "off"):
-                    session.alias_mode = parts[4] == "on"
+                if len(parts) == 5 and parts[4].lower() in ("on", "off"):
+                    session.alias_mode = parts[4].lower() == "on"
                     writer.write(_crlf(line))  # command mirror ack
                 else:
                     writer.write(_crlf("unknown command"))
                 await writer.drain()
                 continue
 
-            if line.startswith("config set "):
+            if lower.startswith("config set "):
                 # For many config set commands, WyreStorm replies with command mirror.
                 writer.write(_crlf(line))
                 await writer.drain()
                 continue
 
-            if line.startswith("config get "):
+            if lower.startswith("config get "):
                 for resp_line in _handle_config_get(cfg, session, line):
                     writer.write(_crlf(resp_line))
                 await writer.drain()
@@ -1325,20 +1328,20 @@ async def handle_client(
 
             # Safe mirrors / minimal responses for RTI driver feature surface.
             # Video wall + multiview query commands (return empty lists rather than "unknown command")
-            if line.startswith(("scene get", "vw get", "wscene2 get")):
+            if lower.startswith(("scene get", "vw get", "wscene2 get")):
                 for resp_line in _handle_videowall_get(cfg, line):
                     writer.write(_crlf(resp_line))
                 await writer.drain()
                 continue
 
-            if line.startswith(("mscene get", "mview get")):
+            if lower.startswith(("mscene get", "mview get")):
                 for resp_line in _handle_multiview_get(cfg, line):
                     writer.write(_crlf(resp_line))
                 await writer.drain()
                 continue
 
             # Scene/multiview activation and edits: acknowledge success.
-            if line.startswith(
+            if lower.startswith(
                 (
                     "scene active ",
                     "wscene2 active ",
@@ -1355,7 +1358,7 @@ async def handle_client(
                 )
             ):
                 # Some of these commands have defined response structure with success|failure.
-                if line.startswith(("mscene active ", "mscene change ", "mscene set ", "mview set ", "mview set audio ")):
+                if lower.startswith(("mscene active ", "mscene change ", "mscene set ", "mview set ", "mview set audio ")):
                     writer.write(_crlf(_as_success(line)))
                 else:
                     writer.write(_crlf(line))
