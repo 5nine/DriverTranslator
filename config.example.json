@@ -1,0 +1,38 @@
+{
+  "nhd_ctl": {
+    "version": {
+      "api": "1.21",
+      "web": "8.3.1",
+      "core": "8.3.8"
+    },
+    "ipsetting": {
+      "ip4addr": "169.254.1.1",
+      "netmask": "255.255.0.0",
+      "gateway": "169.254.1.254"
+    },
+    "ipsetting2": {
+      "ip4addr": "192.168.11.243",
+      "netmask": "255.255.255.0",
+      "gateway": "192.168.11.1"
+    }
+  },
+  "endpoints": {
+    "tx": [
+      { "alias": "source1", "hostname": "NHD-500-TX-001122334455", "amx_stream": 1 },
+      { "alias": "source2", "hostname": "NHD-500-TX-001122334456", "amx_stream": 2 }
+    ],
+    "rx": [
+      { "alias": "display1", "hostname": "NHD-500-RX-001122334457", "amx_decoder_ip": "10.0.0.101" },
+      { "alias": "display2", "hostname": "NHD-500-RX-001122334458", "amx_decoder_ip": "10.0.0.102" }
+    ]
+  },
+  "amx": {
+    "decoder_port": 50002,
+    "connect_timeout_ms": 1000,
+    "command_timeout_ms": 1500
+  },
+  "server": {
+    "send_startup_notify_endpoint_online": true
+  }
+}
+
