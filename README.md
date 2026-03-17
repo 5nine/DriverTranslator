@@ -59,6 +59,8 @@ sudo bash ./linux/bin/install_drivertranslator.sh
 
 5. In RTI, point the WyreStorm driver’s controller IP/port to this Linux machine (`2323` by default).
 
+During install, you can choose **Offline emulator mode**. When enabled, DriverTranslator will **not open TCP connections to AMX** and will only log what it *would* have sent (useful on a bench without AMX hardware).
+
 ### Update later (pull + restart in one go)
 
 Yes—an “executable” can absolutely do a `git pull` and update the running service.

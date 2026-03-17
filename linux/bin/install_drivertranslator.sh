@@ -152,6 +152,9 @@ if [[ "$DO_CONFIG" -eq 1 ]]; then
     read -r -p "Starting TX IP (IN1), e.g. 192.168.10.11: " TX_START_IP
     read -r -p "Starting RX IP (OUT1), e.g. 192.168.10.101: " RX_START_IP
 
+    read -r -p "Offline emulator mode (no AMX TCP, log only)? (y/N): " OFFLINE
+    OFFLINE="${OFFLINE:-N}"
+
     # Which NIC/IP should AMX connections bind to? Prefer the AVoIP NIC IP if provided.
     AMX_BIND_IP=""
     if [[ -f "$NETWORK_CONFIG_PATH" ]]; then
@@ -173,6 +176,7 @@ rx_count = int("${RX_COUNT}")
 tx_start = ipaddress.IPv4Address("${TX_START_IP}")
 rx_start = ipaddress.IPv4Address("${RX_START_IP}")
 amx_bind = "${AMX_BIND_IP}".strip() or None
+offline = "${OFFLINE}".strip().lower() in ("y","yes","true","1","on")
 
 tx = []
 for i in range(tx_count):
@@ -207,8 +211,8 @@ cfg = {
     "decoder_port": 50002,
     "connect_timeout_ms": 1000,
     "command_timeout_ms": 1500,
-    "dry_run": False,
-    "persistent": True,
+    "dry_run": offline,
+    "persistent": (not offline),
     "keepalive_seconds": 30,
     "bind_address": amx_bind
   },
