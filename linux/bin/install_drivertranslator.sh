@@ -214,7 +214,11 @@ cfg = {
     "dry_run": offline,
     "persistent": (not offline),
     "keepalive_seconds": 30,
-    "bind_address": amx_bind
+    "bind_address": amx_bind,
+    "verify_after_set": True,
+    "verify_timeout_ms": 800,
+    "set_queue_limit": 1,
+    "self_test_on_start": True
   },
   "server": { "send_startup_notify_endpoint_online": True },
   "rti_notify": { "enabled": False, "protocol": "udp", "host": None, "port": 0, "bind_address": None, "min_interval_seconds": 10, "repeat_suppression_seconds": 300 },

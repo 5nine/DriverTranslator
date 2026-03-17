@@ -7,7 +7,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 
 LOG = logging.getLogger("drivertranslator")
@@ -79,6 +79,14 @@ def _as_bool(v: Any, *, default: bool) -> bool:
     return default
 
 
+def _clamp_int(v: Any, *, default: int, min_v: int, max_v: int) -> int:
+    try:
+        x = int(v)
+    except Exception:
+        x = default
+    return max(min_v, min(max_v, x))
+
+
 @dataclass(frozen=True)
 class Tx:
     alias: str
@@ -119,6 +127,10 @@ class Config:
     amx_persistent: bool
     amx_keepalive_seconds: int
     amx_bind_address: Optional[str]
+    amx_verify_after_set: bool
+    amx_verify_timeout_ms: int
+    amx_set_queue_limit: int
+    amx_self_test_on_start: bool
     rti_notify_enabled: bool
     rti_notify_protocol: str
     rti_notify_host: Optional[str]
@@ -211,6 +223,10 @@ def load_config(path: str) -> Config:
         amx_persistent=bool(amx.get("persistent", False)),
         amx_keepalive_seconds=_as_int(amx.get("keepalive_seconds"), default=30),
         amx_bind_address=_bind_addr(amx.get("bind_address")),  # AVoIP NIC for outbound AMX
+        amx_verify_after_set=_as_bool(amx.get("verify_after_set"), default=True),
+        amx_verify_timeout_ms=_clamp_int(amx.get("verify_timeout_ms"), default=800, min_v=100, max_v=5000),
+        amx_set_queue_limit=_clamp_int(amx.get("set_queue_limit"), default=1, min_v=1, max_v=20),
+        amx_self_test_on_start=_as_bool(amx.get("self_test_on_start"), default=True),
         rti_notify_enabled=_as_bool(rti_notify.get("enabled"), default=False),
         rti_notify_protocol=str(rti_notify.get("protocol", "udp")).strip().lower(),
         rti_notify_host=_bind_addr(rti_notify.get("host")),
@@ -231,6 +247,37 @@ def load_config(path: str) -> Config:
         http_status_port=_as_int(http_status.get("port"), default=8080),
         http_status_log_lines=_as_int(http_status.get("log_lines"), default=200),
     )
+
+
+def _validate_config(cfg: Config) -> None:
+    errors: List[str] = []
+
+    if not cfg.tx_by_alias:
+        errors.append("No TX endpoints configured.")
+    if not cfg.rx_by_alias:
+        errors.append("No RX endpoints configured.")
+
+    # Aliases and streams
+    for tx in cfg.tx_by_alias.values():
+        if not tx.alias.upper().startswith("IN"):
+            errors.append(f"TX alias does not start with IN: {tx.alias}")
+        if tx.amx_stream <= 0:
+            errors.append(f"TX has invalid amx_stream (must be > 0): {tx.alias} -> {tx.amx_stream}")
+
+    for rx in cfg.rx_by_alias.values():
+        if not rx.alias.upper().startswith("OUT"):
+            errors.append(f"RX alias does not start with OUT: {rx.alias}")
+        if not rx.amx_decoder_ip:
+            errors.append(f"RX missing amx_decoder_ip: {rx.alias}")
+
+    if cfg.amx_dry_run and cfg.amx_persistent:
+        errors.append("Config invalid: amx.dry_run=true and amx.persistent=true cannot both be enabled.")
+
+    if cfg.http_status_port <= 0 or cfg.http_status_port > 65535:
+        errors.append(f"Invalid http_status.port: {cfg.http_status_port}")
+
+    if errors:
+        raise ValueError("Config validation failed:\n- " + "\n- ".join(errors))
 
 
 class RtiNotifier:
@@ -383,6 +430,26 @@ class StatusReporter:
         await self._notifier.send(msg)
 
 
+def _parse_amx_status(data: bytes) -> Dict[str, str]:
+    """
+    AMX getStatus responses are \r-delimited key:value lines (per AMX direct control API).
+    We parse a best-effort mapping for fields we care about (e.g. STREAM).
+    """
+    try:
+        text = data.decode("utf-8", errors="replace")
+    except Exception:
+        return {}
+    out: Dict[str, str] = {}
+    for raw in text.replace("\n", "\r").split("\r"):
+        line = raw.strip()
+        if not line:
+            continue
+        if ":" in line:
+            k, v = line.split(":", 1)
+            out[k.strip().upper()] = v.strip()
+    return out
+
+
 def _http_response(status: str, content_type: str, body: bytes) -> bytes:
     headers = [
         f"HTTP/1.1 {status}",
@@ -448,6 +515,7 @@ async def _handle_http_client(
     cfg: Config,
     health: HealthState,
     amx: Any,
+    state: NhdState,
     started_at: float,
 ) -> None:
     try:
@@ -486,6 +554,13 @@ async def _handle_http_client(
                 else "n/a"
             )
             log_lines = "\n".join(_get_log_tail(cfg.http_status_log_lines))
+            route_rows = []
+            for rx_alias in sorted(cfg.rx_by_alias.keys()):
+                tx_alias = state.video.get(rx_alias) or "NULL"
+                route_rows.append(
+                    f"<tr><td><code>{rx_alias}</code></td><td><code>{tx_alias}</code></td></tr>"
+                )
+            route_html = "\n".join(route_rows)
             body = f"""<!doctype html>
 <html>
 <head>
@@ -585,6 +660,8 @@ async def _handle_http_client(
     .row:last-child {{ border-bottom: 0; }}
     code {{ background: var(--code-bg); color: var(--code-fg); padding: 2px 6px; border-radius: 6px; }}
     pre {{ white-space: pre-wrap; background: var(--log-bg); color: var(--log-fg); padding: 12px; border-radius: 10px; overflow-x: auto; }}
+    table {{ border-collapse: collapse; width: 100%; max-width: 720px; }}
+    th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--row); }}
     .subtle {{ color: var(--muted); font-size: 12px; }}
   </style>
 </head>
@@ -602,6 +679,13 @@ async def _handle_http_client(
     <div class="row"><div>AMX connections (persistent)</div><div><code>{amx_conn}</code></div></div>
   </div>
   <p class="subtle">JSON: <a href="/status.json"><code>/status.json</code></a> • Logs JSON: <a href="/logs.json"><code>/logs.json</code></a></p>
+  <h3>Routing (video)</h3>
+  <table>
+    <thead><tr><th>Output (RX)</th><th>Input (TX)</th></tr></thead>
+    <tbody>
+      {route_html}
+    </tbody>
+  </table>
   <h3>Recent logs</h3>
   <pre>{log_lines}</pre>
   <script>
@@ -674,6 +758,34 @@ class AmxClient:
         async with self._lock_for(decoder_ip):
             await self._set_stream_locked(decoder_ip=decoder_ip, stream=stream)
 
+    async def verify_stream(self, *, decoder_ip: str, expected_stream: int, timeout_ms: int) -> bool:
+        # Stateless client: open a connection and query status
+        try:
+            reader, writer = await _open_connection(
+                decoder_ip,
+                self._decoder_port,
+                timeout=self._connect_timeout,
+                local_addr=self._local_addr,
+            )
+        except Exception:
+            return False
+
+        try:
+            writer.write(b"?\r")
+            await writer.drain()
+            data = b""
+            try:
+                data = await asyncio.wait_for(reader.read(4096), timeout=timeout_ms / 1000)
+            except Exception:
+                pass
+            parsed = _parse_amx_status(data)
+            got = parsed.get("STREAM")
+            return got == str(expected_stream)
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
     async def _set_stream_locked(self, *, decoder_ip: str, stream: int) -> None:
         cmd = f"set:{stream}\r".encode("ascii")
         LOG.info("AMX -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
@@ -713,6 +825,9 @@ class DryRunAmxClient:
         cmd = f"set:{stream}\\r".encode("ascii")
         LOG.info("AMX (dry-run) -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
 
+    async def verify_stream(self, *, decoder_ip: str, expected_stream: int, timeout_ms: int) -> bool:
+        return True
+
 
 class PersistentAmxClient:
     """
@@ -731,12 +846,14 @@ class PersistentAmxClient:
         command_timeout_ms: int,
         keepalive_seconds: int,
         bind_address: Optional[str] = None,
+        set_queue_limit: int = 1,
     ):
         self._decoder_port = decoder_port
         self._connect_timeout = connect_timeout_ms / 1000
         self._command_timeout = command_timeout_ms / 1000
         self._keepalive_seconds = max(0, int(keepalive_seconds))
         self._local_addr: Optional[Tuple[str, int]] = (bind_address, 0) if bind_address else None
+        self._set_queue_limit: int = max(1, int(set_queue_limit))
 
         self._workers: Dict[str, "_DecoderWorker"] = {}
         self._workers_lock = asyncio.Lock()
@@ -746,7 +863,11 @@ class PersistentAmxClient:
             raise ValueError(f"Invalid AMX stream id: {stream}")
 
         worker = await self._get_worker(decoder_ip)
-        await worker.send(f"set:{stream}\r".encode("ascii"))
+        await worker.send_set(stream)
+
+    async def verify_stream(self, *, decoder_ip: str, expected_stream: int, timeout_ms: int) -> bool:
+        worker = await self._get_worker(decoder_ip)
+        return await worker.verify_stream(expected_stream=expected_stream, timeout_ms=timeout_ms)
 
     async def _get_worker(self, decoder_ip: str) -> "_DecoderWorker":
         async with self._workers_lock:
@@ -760,6 +881,7 @@ class PersistentAmxClient:
                     keepalive_seconds=self._keepalive_seconds,
                     local_addr=self._local_addr,
                 )
+                w.set_queue_limit(getattr(self, "_set_queue_limit", 1))
                 self._workers[decoder_ip] = w
                 w.start()
             return w
@@ -796,7 +918,8 @@ class _DecoderWorker:
         self._keepalive_seconds = keepalive_seconds
         self._local_addr = local_addr
 
-        self._q: "asyncio.Queue[Tuple[bytes, asyncio.Future[None]]]" = asyncio.Queue()
+        self._cond = asyncio.Condition()
+        self._set_pending: Optional[Tuple[int, asyncio.Future[None]]] = None
         self._task: Optional[asyncio.Task[None]] = None
 
         self._reader: Optional[asyncio.StreamReader] = None
@@ -808,11 +931,33 @@ class _DecoderWorker:
         if self._task is None:
             self._task = asyncio.create_task(self._run(), name=f"amx-worker:{self._decoder_ip}")
 
-    async def send(self, payload: bytes) -> None:
+    def set_queue_limit(self, limit: int) -> None:
+        # latest-wins: limit is effectively 1; keep this hook for future extension
+        _ = max(1, int(limit))
+
+    async def send_set(self, stream: int) -> None:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[None] = loop.create_future()
-        await self._q.put((payload, fut))
+        async with self._cond:
+            if self._set_pending is None:
+                self._set_pending = (stream, fut)
+            else:
+                # Latest wins: supersede the previous pending set immediately.
+                old_stream, old_fut = self._set_pending
+                if not old_fut.done():
+                    old_fut.set_exception(RuntimeError(f"Superseded by newer set:{stream} (dropped set:{old_stream})"))
+                self._set_pending = (stream, fut)
+            self._cond.notify_all()
         await fut
+
+    async def verify_stream(self, *, expected_stream: int, timeout_ms: int) -> bool:
+        # Query status on the existing socket.
+        try:
+            data = await self._query_status(timeout_ms=timeout_ms)
+        except Exception:
+            return False
+        parsed = _parse_amx_status(data)
+        return parsed.get("STREAM") == str(expected_stream)
 
     async def _run(self) -> None:
         keepalive_task: Optional[asyncio.Task[None]] = None
@@ -823,9 +968,13 @@ class _DecoderWorker:
                 keepalive_task = asyncio.create_task(self._keepalive_loop())
 
             while True:
-                payload, fut = await self._q.get()
+                async with self._cond:
+                    while self._set_pending is None:
+                        await self._cond.wait()
+                    stream, fut = self._set_pending
+                    self._set_pending = None
                 try:
-                    await self._send_with_retry(payload)
+                    await self._send_with_retry(f"set:{stream}\r".encode("ascii"))
                     if not fut.done():
                         fut.set_result(None)
                 except Exception as e:
@@ -868,6 +1017,17 @@ class _DecoderWorker:
         # Best-effort read to keep RX buffers clear; don't block routing on large status packets.
         with contextlib.suppress(Exception):
             await asyncio.wait_for(self._reader.read(256), timeout=self._command_timeout)
+
+    async def _query_status(self, *, timeout_ms: int) -> bytes:
+        await self._ensure_connected()
+        assert self._writer is not None
+        assert self._reader is not None
+        self._writer.write(b"?\r")
+        await self._writer.drain()
+        try:
+            return await asyncio.wait_for(self._reader.read(4096), timeout=timeout_ms / 1000)
+        except Exception:
+            return b""
 
     async def _ensure_connected(self) -> None:
         if self._writer is not None and not self._writer.is_closing():
@@ -1195,6 +1355,24 @@ async def handle_client(
                             if rx_obj is not None:
                                 rx_aliases.append(rx_obj.alias)
                         state.set_all_media(tx_alias=tx_alias, rx_aliases=rx_aliases)
+
+                        # Optional AMX verification (problems-only)
+                        if (not cfg.amx_dry_run) and cfg.amx_verify_after_set and tx_alias is not None:
+                            tx_obj2 = _lookup_tx(cfg, tx_alias)
+                            expected = tx_obj2.amx_stream if tx_obj2 is not None else None
+                            if expected:
+                                for rx_a in rx_aliases:
+                                    ip = cfg.rx_by_alias[rx_a].amx_decoder_ip
+                                    ok_v = await amx.verify_stream(
+                                        decoder_ip=ip,
+                                        expected_stream=expected,
+                                        timeout_ms=cfg.amx_verify_timeout_ms,
+                                    )
+                                    if not ok_v:
+                                        await notifier.problem(
+                                            f"amx.verify.{ip}",
+                                            f"DT: ERROR AMX verify failed: {rx_a} expected STREAM {expected}",
+                                        )
                 except Exception as e:
                     LOG.exception("AMX routing failed")
                     await notifier.problem("amx.route", f"DT: ERROR AMX route failed: {e}")
@@ -1247,6 +1425,21 @@ async def handle_client(
                                     ),
                                     return_exceptions=False,
                                 )
+
+                                if (not cfg.amx_dry_run) and cfg.amx_verify_after_set:
+                                    expected = tx_obj.amx_stream
+                                    for rx_a in rx_aliases:
+                                        ip = cfg.rx_by_alias[rx_a].amx_decoder_ip
+                                        ok_v = await amx.verify_stream(
+                                            decoder_ip=ip,
+                                            expected_stream=expected,
+                                            timeout_ms=cfg.amx_verify_timeout_ms,
+                                        )
+                                        if not ok_v:
+                                            await notifier.problem(
+                                                f"amx.verify.{ip}",
+                                                f"DT: ERROR AMX verify failed: {rx_a} expected STREAM {expected}",
+                                            )
                             except Exception as e:
                                 LOG.exception("AMX routing failed")
                                 await notifier.problem(
@@ -1393,6 +1586,7 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
             command_timeout_ms=cfg.amx_command_timeout_ms,
             keepalive_seconds=cfg.amx_keepalive_seconds,
             bind_address=cfg.amx_bind_address,
+            set_queue_limit=cfg.amx_set_queue_limit,
         )
     else:
         amx = AmxClient(
@@ -1416,6 +1610,30 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
     )
     await notifier.start()
 
+    # Optional AMX self-test on startup (problems-only notification)
+    if cfg.amx_self_test_on_start and (not cfg.amx_dry_run):
+        ok = 0
+        fail: List[str] = []
+        local_addr = (cfg.amx_bind_address, 0) if cfg.amx_bind_address else None
+        for rx in cfg.rx_by_alias.values():
+            ip = rx.amx_decoder_ip
+            try:
+                _r, w = await _open_connection(
+                    ip, cfg.amx_decoder_port, timeout=cfg.amx_connect_timeout_ms / 1000, local_addr=local_addr
+                )
+                w.close()
+                with contextlib.suppress(Exception):
+                    await w.wait_closed()
+                ok += 1
+            except Exception:
+                fail.append(ip)
+        if fail:
+            await notifier.problem(
+                "amx.selftest",
+                f"DT: ERROR AMX self-test: {ok}/{len(cfg.rx_by_alias)} reachable. Unreachable: {', '.join(fail[:5])}"
+                + (" ..." if len(fail) > 5 else ""),
+            )
+
     status = StatusReporter(
         enabled=cfg.rti_status_enabled,
         protocol=cfg.rti_status_protocol,
@@ -1431,7 +1649,9 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
 
     if cfg.http_status_enabled:
         http_server = await asyncio.start_server(
-            lambda r, w: _handle_http_client(r, w, cfg=cfg, health=health, amx=amx, started_at=started_at),
+            lambda r, w: _handle_http_client(
+                r, w, cfg=cfg, health=health, amx=amx, state=state, started_at=started_at
+            ),
             host=cfg.http_status_bind,
             port=cfg.http_status_port,
         )
@@ -1469,6 +1689,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     logging.getLogger().addHandler(ring)
 
     cfg = load_config(args.config)
+    _validate_config(cfg)
 
     try:
         asyncio.run(run_server(cfg=cfg, listen=args.listen, port=args.port))

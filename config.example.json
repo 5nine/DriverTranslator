@@ -33,7 +33,11 @@
     "dry_run": false,
     "persistent": false,
     "keepalive_seconds": 30,
-    "bind_address": null
+    "bind_address": null,
+    "verify_after_set": true,
+    "verify_timeout_ms": 800,
+    "set_queue_limit": 1,
+    "self_test_on_start": true
   },
   "server": {
     "send_startup_notify_endpoint_online": true
