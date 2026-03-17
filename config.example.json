@@ -18,21 +18,32 @@
   },
   "endpoints": {
     "tx": [
-      { "alias": "source1", "hostname": "NHD-500-TX-001122334455", "amx_stream": 1 },
-      { "alias": "source2", "hostname": "NHD-500-TX-001122334456", "amx_stream": 2 }
+      { "alias": "source1", "hostname": "NHD-500-TX-001122334455", "ip": "192.168.10.11", "amx_stream": 1 },
+      { "alias": "source2", "hostname": "NHD-500-TX-001122334456", "ip": "192.168.10.12", "amx_stream": 2 }
     ],
     "rx": [
-      { "alias": "display1", "hostname": "NHD-500-RX-001122334457", "amx_decoder_ip": "10.0.0.101" },
-      { "alias": "display2", "hostname": "NHD-500-RX-001122334458", "amx_decoder_ip": "10.0.0.102" }
+      { "alias": "display1", "hostname": "NHD-500-RX-001122334457", "ip": "192.168.10.101", "amx_decoder_ip": "10.0.0.101" },
+      { "alias": "display2", "hostname": "NHD-500-RX-001122334458", "ip": "192.168.10.102", "amx_decoder_ip": "10.0.0.102" }
     ]
   },
   "amx": {
     "decoder_port": 50002,
     "connect_timeout_ms": 1000,
-    "command_timeout_ms": 1500
+    "command_timeout_ms": 1500,
+    "dry_run": false,
+    "persistent": false,
+    "keepalive_seconds": 30,
+    "bind_address": null
   },
   "server": {
     "send_startup_notify_endpoint_online": true
+  },
+  "rti_notify": {
+    "enabled": false,
+    "protocol": "udp",
+    "host": "192.168.1.50",
+    "port": 30001,
+    "bind_address": null
   }
 }
 

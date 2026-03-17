@@ -1,0 +1,75 @@
+{
+  "nhd_ctl": {
+    "version": { "api": "1.21", "web": "8.3.1", "core": "8.3.8" },
+    "ipsetting": { "ip4addr": "169.254.1.1", "netmask": "255.255.0.0", "gateway": "169.254.1.254" },
+    "ipsetting2": { "ip4addr": "192.168.11.243", "netmask": "255.255.255.0", "gateway": "192.168.11.1" }
+  },
+  "endpoints": {
+    "tx": [
+      { "alias": "IN1-BOX1", "hostname": "NHD-500-TX-000000000001", "ip": "192.168.10.11", "amx_stream": 1 },
+      { "alias": "IN2-BOX2", "hostname": "NHD-500-TX-000000000002", "ip": "192.168.10.12", "amx_stream": 2 },
+      { "alias": "IN3-BOX3", "hostname": "NHD-500-TX-000000000003", "ip": "192.168.10.13", "amx_stream": 3 },
+      { "alias": "IN4-BOX4", "hostname": "NHD-500-TX-000000000004", "ip": "192.168.10.14", "amx_stream": 4 },
+      { "alias": "IN5-BOX5", "hostname": "NHD-500-TX-000000000005", "ip": "192.168.10.15", "amx_stream": 5 },
+      { "alias": "IN6-BOX6", "hostname": "NHD-500-TX-000000000006", "ip": "192.168.10.16", "amx_stream": 6 },
+      { "alias": "IN7-BOX7", "hostname": "NHD-500-TX-000000000007", "ip": "192.168.10.17", "amx_stream": 7 },
+      { "alias": "IN8-BOX8", "hostname": "NHD-500-TX-000000000008", "ip": "192.168.10.18", "amx_stream": 8 },
+      { "alias": "IN9-BOX9", "hostname": "NHD-500-TX-000000000009", "ip": "192.168.10.19", "amx_stream": 9 },
+      { "alias": "IN10-BOX10", "hostname": "NHD-500-TX-000000000010", "ip": "192.168.10.20", "amx_stream": 10 }
+    ],
+    "rx": [
+      { "alias": "OUT1-TV1", "hostname": "NHD-500-RX-000000000101", "ip": "192.168.10.101", "amx_decoder_ip": "192.168.10.101" },
+      { "alias": "OUT2-TV2", "hostname": "NHD-500-RX-000000000102", "ip": "192.168.10.102", "amx_decoder_ip": "192.168.10.102" },
+      { "alias": "OUT3-TV3", "hostname": "NHD-500-RX-000000000103", "ip": "192.168.10.103", "amx_decoder_ip": "192.168.10.103" },
+      { "alias": "OUT4-TV4", "hostname": "NHD-500-RX-000000000104", "ip": "192.168.10.104", "amx_decoder_ip": "192.168.10.104" },
+      { "alias": "OUT5-TV5", "hostname": "NHD-500-RX-000000000105", "ip": "192.168.10.105", "amx_decoder_ip": "192.168.10.105" },
+      { "alias": "OUT6-TV6", "hostname": "NHD-500-RX-000000000106", "ip": "192.168.10.106", "amx_decoder_ip": "192.168.10.106" },
+      { "alias": "OUT7-TV7", "hostname": "NHD-500-RX-000000000107", "ip": "192.168.10.107", "amx_decoder_ip": "192.168.10.107" },
+      { "alias": "OUT8-TV8", "hostname": "NHD-500-RX-000000000108", "ip": "192.168.10.108", "amx_decoder_ip": "192.168.10.108" },
+      { "alias": "OUT9-TV9", "hostname": "NHD-500-RX-000000000109", "ip": "192.168.10.109", "amx_decoder_ip": "192.168.10.109" },
+      { "alias": "OUT10-TV10", "hostname": "NHD-500-RX-000000000110", "ip": "192.168.10.110", "amx_decoder_ip": "192.168.10.110" },
+      { "alias": "OUT11-TV11", "hostname": "NHD-500-RX-000000000111", "ip": "192.168.10.111", "amx_decoder_ip": "192.168.10.111" },
+      { "alias": "OUT12-TV12", "hostname": "NHD-500-RX-000000000112", "ip": "192.168.10.112", "amx_decoder_ip": "192.168.10.112" },
+      { "alias": "OUT13-TV13", "hostname": "NHD-500-RX-000000000113", "ip": "192.168.10.113", "amx_decoder_ip": "192.168.10.113" },
+      { "alias": "OUT14-TV14", "hostname": "NHD-500-RX-000000000114", "ip": "192.168.10.114", "amx_decoder_ip": "192.168.10.114" },
+      { "alias": "OUT15-TV15", "hostname": "NHD-500-RX-000000000115", "ip": "192.168.10.115", "amx_decoder_ip": "192.168.10.115" },
+      { "alias": "OUT16-TV16", "hostname": "NHD-500-RX-000000000116", "ip": "192.168.10.116", "amx_decoder_ip": "192.168.10.116" },
+      { "alias": "OUT17-TV17", "hostname": "NHD-500-RX-000000000117", "ip": "192.168.10.117", "amx_decoder_ip": "192.168.10.117" },
+      { "alias": "OUT18-TV18", "hostname": "NHD-500-RX-000000000118", "ip": "192.168.10.118", "amx_decoder_ip": "192.168.10.118" },
+      { "alias": "OUT19-TV19", "hostname": "NHD-500-RX-000000000119", "ip": "192.168.10.119", "amx_decoder_ip": "192.168.10.119" },
+      { "alias": "OUT20-TV20", "hostname": "NHD-500-RX-000000000120", "ip": "192.168.10.120", "amx_decoder_ip": "192.168.10.120" },
+      { "alias": "OUT21-TV21", "hostname": "NHD-500-RX-000000000121", "ip": "192.168.10.121", "amx_decoder_ip": "192.168.10.121" },
+      { "alias": "OUT22-TV22", "hostname": "NHD-500-RX-000000000122", "ip": "192.168.10.122", "amx_decoder_ip": "192.168.10.122" },
+      { "alias": "OUT23-TV23", "hostname": "NHD-500-RX-000000000123", "ip": "192.168.10.123", "amx_decoder_ip": "192.168.10.123" },
+      { "alias": "OUT24-TV24", "hostname": "NHD-500-RX-000000000124", "ip": "192.168.10.124", "amx_decoder_ip": "192.168.10.124" },
+      { "alias": "OUT25-TV25", "hostname": "NHD-500-RX-000000000125", "ip": "192.168.10.125", "amx_decoder_ip": "192.168.10.125" },
+      { "alias": "OUT26-TV26", "hostname": "NHD-500-RX-000000000126", "ip": "192.168.10.126", "amx_decoder_ip": "192.168.10.126" },
+      { "alias": "OUT27-TV27", "hostname": "NHD-500-RX-000000000127", "ip": "192.168.10.127", "amx_decoder_ip": "192.168.10.127" },
+      { "alias": "OUT28-TV28", "hostname": "NHD-500-RX-000000000128", "ip": "192.168.10.128", "amx_decoder_ip": "192.168.10.128" },
+      { "alias": "OUT29-TV29", "hostname": "NHD-500-RX-000000000129", "ip": "192.168.10.129", "amx_decoder_ip": "192.168.10.129" },
+      { "alias": "OUT30-TV30", "hostname": "NHD-500-RX-000000000130", "ip": "192.168.10.130", "amx_decoder_ip": "192.168.10.130" },
+      { "alias": "OUT31-TV31", "hostname": "NHD-500-RX-000000000131", "ip": "192.168.10.131", "amx_decoder_ip": "192.168.10.131" },
+      { "alias": "OUT32-TV32", "hostname": "NHD-500-RX-000000000132", "ip": "192.168.10.132", "amx_decoder_ip": "192.168.10.132" },
+      { "alias": "OUT33-TV33", "hostname": "NHD-500-RX-000000000133", "ip": "192.168.10.133", "amx_decoder_ip": "192.168.10.133" },
+      { "alias": "OUT34-TV34", "hostname": "NHD-500-RX-000000000134", "ip": "192.168.10.134", "amx_decoder_ip": "192.168.10.134" },
+      { "alias": "OUT35-TV35", "hostname": "NHD-500-RX-000000000135", "ip": "192.168.10.135", "amx_decoder_ip": "192.168.10.135" },
+      { "alias": "OUT36-TV36", "hostname": "NHD-500-RX-000000000136", "ip": "192.168.10.136", "amx_decoder_ip": "192.168.10.136" },
+      { "alias": "OUT37-TV37", "hostname": "NHD-500-RX-000000000137", "ip": "192.168.10.137", "amx_decoder_ip": "192.168.10.137" },
+      { "alias": "OUT38-TV38", "hostname": "NHD-500-RX-000000000138", "ip": "192.168.10.138", "amx_decoder_ip": "192.168.10.138" },
+      { "alias": "OUT39-TV39", "hostname": "NHD-500-RX-000000000139", "ip": "192.168.10.139", "amx_decoder_ip": "192.168.10.139" },
+      { "alias": "OUT40-TV40", "hostname": "NHD-500-RX-000000000140", "ip": "192.168.10.140", "amx_decoder_ip": "192.168.10.140" }
+    ]
+  },
+  "amx": {
+    "decoder_port": 50002,
+    "connect_timeout_ms": 1000,
+    "command_timeout_ms": 1500,
+    "dry_run": true,
+    "persistent": false,
+    "keepalive_seconds": 30
+  },
+  "server": {
+    "send_startup_notify_endpoint_online": true
+  }
+}
+

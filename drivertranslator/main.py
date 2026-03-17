@@ -11,6 +11,30 @@ from typing import Any, Dict, List, Optional, Tuple
 LOG = logging.getLogger("drivertranslator")
 
 
+async def _open_connection(
+    host: str,
+    port: int,
+    *,
+    timeout: float,
+    local_addr: Optional[Tuple[str, int]] = None,
+) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    """Open TCP connection, optionally binding to a specific local address (e.g. AVoIP NIC)."""
+    if local_addr is None:
+        return await asyncio.wait_for(
+            asyncio.open_connection(host, port),
+            timeout=timeout,
+        )
+    loop = asyncio.get_running_loop()
+    reader = asyncio.StreamReader()
+    protocol = asyncio.StreamReaderProtocol(reader)
+    transport, _ = await asyncio.wait_for(
+        loop.create_connection(lambda: protocol, host, port, local_addr=local_addr),
+        timeout=timeout,
+    )
+    writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+    return reader, writer
+
+
 def _crlf(line: str) -> bytes:
     return (line + "\r\n").encode("utf-8", errors="replace")
 
@@ -22,10 +46,31 @@ def _as_int(v: Any, *, default: int) -> int:
         return default
 
 
+def _bind_addr(v: Any) -> Optional[str]:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
+def _as_bool(v: Any, *, default: bool) -> bool:
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "y", "on"):
+        return True
+    if s in ("0", "false", "no", "n", "off"):
+        return False
+    return default
+
+
 @dataclass(frozen=True)
 class Tx:
     alias: str
     hostname: str
+    ip: Optional[str]
     amx_stream: int
 
 
@@ -33,6 +78,7 @@ class Tx:
 class Rx:
     alias: str
     hostname: str
+    ip: Optional[str]
     amx_decoder_ip: str
 
 
@@ -56,6 +102,15 @@ class Config:
     amx_connect_timeout_ms: int
     amx_command_timeout_ms: int
     send_startup_notify_endpoint_online: bool
+    amx_dry_run: bool
+    amx_persistent: bool
+    amx_keepalive_seconds: int
+    amx_bind_address: Optional[str]
+    rti_notify_enabled: bool
+    rti_notify_protocol: str
+    rti_notify_host: Optional[str]
+    rti_notify_port: int
+    rti_notify_bind_address: Optional[str]
 
 
 def load_config(path: str) -> Config:
@@ -90,18 +145,23 @@ def load_config(path: str) -> Config:
     for t in tx_list:
         alias = str(t["alias"])
         hostname = str(t.get("hostname") or f"NHD-TX-{alias}")
+        ip = t.get("ip")
+        ip_s = str(ip) if ip is not None else None
         amx_stream = _as_int(t.get("amx_stream"), default=0)
-        txs.append(Tx(alias=alias, hostname=hostname, amx_stream=amx_stream))
+        txs.append(Tx(alias=alias, hostname=hostname, ip=ip_s, amx_stream=amx_stream))
 
     rxs: List[Rx] = []
     for r in rx_list:
         alias = str(r["alias"])
         hostname = str(r.get("hostname") or f"NHD-RX-{alias}")
+        ip = r.get("ip")
+        ip_s = str(ip) if ip is not None else None
         ip = str(r["amx_decoder_ip"])
-        rxs.append(Rx(alias=alias, hostname=hostname, amx_decoder_ip=ip))
+        rxs.append(Rx(alias=alias, hostname=hostname, ip=ip_s, amx_decoder_ip=ip))
 
     amx = raw.get("amx", {})
     server = raw.get("server", {})
+    rti_notify = raw.get("rti_notify", {})
 
     tx_by_alias = {t.alias: t for t in txs}
     tx_by_hostname = {t.hostname: t for t in txs}
@@ -120,14 +180,89 @@ def load_config(path: str) -> Config:
         send_startup_notify_endpoint_online=bool(
             server.get("send_startup_notify_endpoint_online", True)
         ),
+        amx_dry_run=bool(amx.get("dry_run", False)),
+        amx_persistent=bool(amx.get("persistent", False)),
+        amx_keepalive_seconds=_as_int(amx.get("keepalive_seconds"), default=30),
+        amx_bind_address=_bind_addr(amx.get("bind_address")),  # AVoIP NIC for outbound AMX
+        rti_notify_enabled=_as_bool(rti_notify.get("enabled"), default=False),
+        rti_notify_protocol=str(rti_notify.get("protocol", "udp")).strip().lower(),
+        rti_notify_host=_bind_addr(rti_notify.get("host")),
+        rti_notify_port=_as_int(rti_notify.get("port"), default=0),
+        rti_notify_bind_address=_bind_addr(rti_notify.get("bind_address")),
     )
 
 
+class RtiNotifier:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        protocol: str,
+        host: Optional[str],
+        port: int,
+        bind_address: Optional[str] = None,
+    ) -> None:
+        self._enabled = enabled and bool(host) and int(port) > 0
+        self._protocol = protocol
+        self._host = host or ""
+        self._port = int(port)
+        self._bind_address = bind_address
+        self._udp_transport: Optional[asyncio.DatagramTransport] = None
+        self._udp_ready = asyncio.Event()
+        self._lock = asyncio.Lock()
+
+    async def start(self) -> None:
+        if not self._enabled:
+            return
+        if self._protocol == "udp":
+            loop = asyncio.get_running_loop()
+            local = (self._bind_address, 0) if self._bind_address else None
+            transport, _ = await loop.create_datagram_endpoint(lambda: asyncio.DatagramProtocol(), local_addr=local)
+            self._udp_transport = transport  # type: ignore[assignment]
+            self._udp_ready.set()
+
+    async def send(self, message: str) -> None:
+        if not self._enabled:
+            return
+        msg = (message.rstrip("\r\n") + "\r\n").encode("utf-8", errors="replace")
+
+        if self._protocol == "udp":
+            await self._udp_ready.wait()
+            if self._udp_transport is not None:
+                self._udp_transport.sendto(msg, (self._host, self._port))
+            return
+
+        # TCP: connect, send, close (simple + robust)
+        async with self._lock:
+            try:
+                reader, writer = await _open_connection(
+                    self._host,
+                    self._port,
+                    timeout=1.5,
+                    local_addr=(self._bind_address, 0) if self._bind_address else None,
+                )
+                writer.write(msg)
+                await writer.drain()
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+            except Exception:
+                LOG.debug("RTI notify send failed", exc_info=True)
+
+
 class AmxClient:
-    def __init__(self, *, decoder_port: int, connect_timeout_ms: int, command_timeout_ms: int):
+    def __init__(
+        self,
+        *,
+        decoder_port: int,
+        connect_timeout_ms: int,
+        command_timeout_ms: int,
+        bind_address: Optional[str] = None,
+    ):
         self._decoder_port = decoder_port
         self._connect_timeout = connect_timeout_ms / 1000
         self._command_timeout = command_timeout_ms / 1000
+        self._local_addr: Optional[Tuple[str, int]] = (bind_address, 0) if bind_address else None
         self._locks: Dict[str, asyncio.Lock] = {}
 
     def _lock_for(self, decoder_ip: str) -> asyncio.Lock:
@@ -149,9 +284,11 @@ class AmxClient:
         cmd = f"set:{stream}\r".encode("ascii")
         LOG.info("AMX -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
         try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(decoder_ip, self._decoder_port),
+            reader, writer = await _open_connection(
+                decoder_ip,
+                self._decoder_port,
                 timeout=self._connect_timeout,
+                local_addr=self._local_addr,
             )
         except Exception as e:
             raise ConnectionError(f"Failed to connect to AMX decoder {decoder_ip}:{self._decoder_port}: {e}") from e
@@ -172,9 +309,233 @@ class AmxClient:
                 await writer.wait_closed()
 
 
+class DryRunAmxClient:
+    def __init__(self, *, decoder_port: int):
+        self._decoder_port = decoder_port
+
+    async def set_stream(self, *, decoder_ip: str, stream: int) -> None:
+        if stream <= 0:
+            raise ValueError(f"Invalid AMX stream id: {stream}")
+        cmd = f"set:{stream}\\r".encode("ascii")
+        LOG.info("AMX (dry-run) -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
+
+
+class PersistentAmxClient:
+    """
+    Maintains one TCP connection per decoder (port 50002).
+
+    - Fast switching: no connect/disconnect per command.
+    - Safe for 50002 single-connection limitation: we own the one socket.
+    - Auto-reconnect and optional keepalive.
+    """
+
+    def __init__(
+        self,
+        *,
+        decoder_port: int,
+        connect_timeout_ms: int,
+        command_timeout_ms: int,
+        keepalive_seconds: int,
+        bind_address: Optional[str] = None,
+    ):
+        self._decoder_port = decoder_port
+        self._connect_timeout = connect_timeout_ms / 1000
+        self._command_timeout = command_timeout_ms / 1000
+        self._keepalive_seconds = max(0, int(keepalive_seconds))
+        self._local_addr: Optional[Tuple[str, int]] = (bind_address, 0) if bind_address else None
+
+        self._workers: Dict[str, "_DecoderWorker"] = {}
+        self._workers_lock = asyncio.Lock()
+
+    async def set_stream(self, *, decoder_ip: str, stream: int) -> None:
+        if stream <= 0:
+            raise ValueError(f"Invalid AMX stream id: {stream}")
+
+        worker = await self._get_worker(decoder_ip)
+        await worker.send(f"set:{stream}\r".encode("ascii"))
+
+    async def _get_worker(self, decoder_ip: str) -> "_DecoderWorker":
+        async with self._workers_lock:
+            w = self._workers.get(decoder_ip)
+            if w is None:
+                w = _DecoderWorker(
+                    decoder_ip=decoder_ip,
+                    decoder_port=self._decoder_port,
+                    connect_timeout=self._connect_timeout,
+                    command_timeout=self._command_timeout,
+                    keepalive_seconds=self._keepalive_seconds,
+                    local_addr=self._local_addr,
+                )
+                self._workers[decoder_ip] = w
+                w.start()
+            return w
+
+
+class _DecoderWorker:
+    def __init__(
+        self,
+        *,
+        decoder_ip: str,
+        decoder_port: int,
+        connect_timeout: float,
+        command_timeout: float,
+        keepalive_seconds: int,
+        local_addr: Optional[Tuple[str, int]] = None,
+    ) -> None:
+        self._decoder_ip = decoder_ip
+        self._decoder_port = decoder_port
+        self._connect_timeout = connect_timeout
+        self._command_timeout = command_timeout
+        self._keepalive_seconds = keepalive_seconds
+        self._local_addr = local_addr
+
+        self._q: "asyncio.Queue[Tuple[bytes, asyncio.Future[None]]]" = asyncio.Queue()
+        self._task: Optional[asyncio.Task[None]] = None
+
+        self._reader: Optional[asyncio.StreamReader] = None
+        self._writer: Optional[asyncio.StreamWriter] = None
+        self._connected_evt = asyncio.Event()
+
+    def start(self) -> None:
+        if self._task is None:
+            self._task = asyncio.create_task(self._run(), name=f"amx-worker:{self._decoder_ip}")
+
+    async def send(self, payload: bytes) -> None:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[None] = loop.create_future()
+        await self._q.put((payload, fut))
+        await fut
+
+    async def _run(self) -> None:
+        keepalive_task: Optional[asyncio.Task[None]] = None
+        try:
+            await self._ensure_connected()
+
+            if self._keepalive_seconds > 0:
+                keepalive_task = asyncio.create_task(self._keepalive_loop())
+
+            while True:
+                payload, fut = await self._q.get()
+                try:
+                    await self._send_with_retry(payload)
+                    if not fut.done():
+                        fut.set_result(None)
+                except Exception as e:
+                    if not fut.done():
+                        fut.set_exception(e)
+        finally:
+            if keepalive_task is not None:
+                keepalive_task.cancel()
+                with contextlib.suppress(Exception):
+                    await keepalive_task
+            await self._close()
+
+    async def _keepalive_loop(self) -> None:
+        # AMX supports getStatus and "?" (doc shows "?\r" as getStatus alias).
+        keepalive = b"?\r"
+        while True:
+            await asyncio.sleep(self._keepalive_seconds)
+            try:
+                await self._send_raw(keepalive, log_label="AMX keepalive")
+            except Exception:
+                # Connection might be down; worker main loop will reconnect on next command.
+                await self._reconnect()
+
+    async def _send_with_retry(self, payload: bytes) -> None:
+        try:
+            await self._send_raw(payload, log_label="AMX")
+        except Exception:
+            await self._reconnect()
+            await self._send_raw(payload, log_label="AMX(retry)")
+
+    async def _send_raw(self, payload: bytes, *, log_label: str) -> None:
+        await self._ensure_connected()
+        assert self._writer is not None
+        assert self._reader is not None
+
+        LOG.info("%s -> %s:%d %r", log_label, self._decoder_ip, self._decoder_port, payload)
+        self._writer.write(payload)
+        await self._writer.drain()
+
+        # Best-effort read to keep RX buffers clear; don't block routing on large status packets.
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self._reader.read(256), timeout=self._command_timeout)
+
+    async def _ensure_connected(self) -> None:
+        if self._writer is not None and not self._writer.is_closing():
+            return
+        await self._reconnect()
+
+    async def _reconnect(self) -> None:
+        await self._close()
+        self._connected_evt.clear()
+
+        try:
+            reader, writer = await _open_connection(
+                self._decoder_ip,
+                self._decoder_port,
+                timeout=self._connect_timeout,
+                local_addr=self._local_addr,
+            )
+        except Exception as e:
+            raise ConnectionError(
+                f"Failed to connect to AMX decoder {self._decoder_ip}:{self._decoder_port}: {e}"
+            ) from e
+
+        self._reader = reader
+        self._writer = writer
+        self._connected_evt.set()
+
+    async def _close(self) -> None:
+        if self._writer is not None:
+            self._writer.close()
+            with contextlib.suppress(Exception):
+                await self._writer.wait_closed()
+        self._reader = None
+        self._writer = None
+
+
 class NhdCtlSession:
     def __init__(self) -> None:
         self.alias_mode: bool = True  # default per doc: on
+
+
+class NhdState:
+    """
+    Shared state across sessions to emulate the controller.
+
+    RTI drivers commonly rely on matrix query commands to populate feedback variables.
+    """
+
+    def __init__(self, cfg: Config) -> None:
+        # NULL means "no assignment"
+        self.video: Dict[str, Optional[str]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
+        self.audio: Dict[str, Optional[str]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
+        self.usb: Dict[str, Optional[str]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
+        self.serial: Dict[str, Optional[str]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
+        self.infrared: Dict[str, Optional[str]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
+
+    def set_all_media(self, *, tx_alias: Optional[str], rx_aliases: List[str]) -> None:
+        for rx in rx_aliases:
+            self.video[rx] = tx_alias
+            self.audio[rx] = tx_alias
+            self.usb[rx] = tx_alias
+            self.serial[rx] = tx_alias
+            self.infrared[rx] = tx_alias
+
+    def set_breakaway(self, *, kind: str, tx_alias: Optional[str], rx_aliases: List[str]) -> None:
+        table = {
+            "video": self.video,
+            "audio": self.audio,
+            "audio2": self.audio,  # treat as same for emulation purposes
+            "usb": self.usb,
+            "serial": self.serial,
+            "infrared": self.infrared,
+        }.get(kind)
+        if table is None:
+            return
+        for rx in rx_aliases:
+            table[rx] = tx_alias
 
 
 def _lookup_tx(cfg: Config, token: str) -> Optional[Tx]:
@@ -262,7 +623,7 @@ def _handle_config_get(cfg: Config, session: NhdCtlSession, cmd: str) -> List[st
     return ["unknown command"]
 
 
-async def _handle_matrix_set(cfg: Config, amx: AmxClient, cmd: str) -> Tuple[bool, str]:
+async def _handle_matrix_set(cfg: Config, amx: Any, cmd: str) -> Tuple[bool, str]:
     # cmd: "matrix set <TX> <RX1> <RX2> ... <RXn>"
     parts = cmd.split()
     if len(parts) < 4:
@@ -273,7 +634,11 @@ async def _handle_matrix_set(cfg: Config, amx: AmxClient, cmd: str) -> Tuple[boo
 
     tx = _lookup_tx(cfg, tx_token)
     if tx is None:
-        return False, "unknown command"
+        # Allow explicit NULL routing in WyreStorm API
+        if tx_token.upper() == "NULL":
+            tx = None
+        else:
+            return False, "unknown command"
 
     rxs: List[Rx] = []
     for token in rx_tokens:
@@ -282,19 +647,93 @@ async def _handle_matrix_set(cfg: Config, amx: AmxClient, cmd: str) -> Tuple[boo
             return False, "unknown command"
         rxs.append(rx)
 
-    # Fire AMX commands (one per decoder). Do it concurrently, but each decoder is locked in AmxClient.
-    await asyncio.gather(
-        *(amx.set_stream(decoder_ip=rx.amx_decoder_ip, stream=tx.amx_stream) for rx in rxs),
-        return_exceptions=False,
-    )
+    if tx is not None:
+        # Fire AMX commands (one per decoder). Do it concurrently.
+        await asyncio.gather(
+            *(amx.set_stream(decoder_ip=rx.amx_decoder_ip, stream=tx.amx_stream) for rx in rxs),
+            return_exceptions=False,
+        )
+    else:
+        LOG.info("AMX routing skipped: NULL assignment requested")
 
     # WyreStorm ack is a "command mirror"
     return True, cmd
 
 
-async def handle_client(cfg: Config, amx: AmxClient, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+def _format_matrix_info(
+    *,
+    heading: str,
+    mapping: Dict[str, Optional[str]],
+    rx_aliases: List[str],
+) -> List[str]:
+    lines = [f"{heading} information:"]
+    for rx in rx_aliases:
+        tx = mapping.get(rx)
+        lines.append(f"{(tx if tx is not None else 'NULL')} {rx}")
+    return lines
+
+
+def _as_success(line: str) -> str:
+    # Some WyreStorm API commands explicitly append success|failure, others just mirror.
+    # Returning success for state-mutating commands keeps RTI drivers happy.
+    if line.endswith(" success") or line.endswith(" failure"):
+        return line
+    return f"{line} success"
+
+
+def _handle_multiview_get(cfg: Config, cmd: str) -> List[str]:
+    parts = cmd.split()
+    if parts[:2] == ["mscene", "get"]:
+        # Minimal empty layout list response.
+        # If RX specified, return a single "mscene list:" + that RX with no layouts.
+        if len(parts) == 3:
+            rx = _lookup_rx(cfg, parts[2])
+            if rx is None:
+                return ["unknown command"]
+            return ["mscene list:", f"{rx.alias}"]
+        # all RX
+        lines = ["mscene list:"]
+        for rx in cfg.rx_by_alias.values():
+            lines.append(f"{rx.alias}")
+        return lines
+
+    if parts[:2] == ["mview", "get"]:
+        # Minimal empty custom layout response.
+        if len(parts) == 3:
+            rx = _lookup_rx(cfg, parts[2])
+            if rx is None:
+                return ["unknown command"]
+            return ["mview information:", f"{rx.alias} tile"]
+        lines = ["mview information:"]
+        for rx in cfg.rx_by_alias.values():
+            lines.append(f"{rx.alias} tile")
+        return lines
+
+    return ["unknown command"]
+
+
+def _handle_videowall_get(cfg: Config, cmd: str) -> List[str]:
+    parts = cmd.split()
+    if parts[:2] == ["scene", "get"]:
+        return ["scene list:"]
+    if parts[:2] == ["vw", "get"]:
+        return ["Video wall information:"]
+    if parts[:2] == ["wscene2", "get"]:
+        return ["wscene2 list:"]
+    return ["unknown command"]
+
+
+async def handle_client(
+    cfg: Config,
+    amx: Any,
+    state: NhdState,
+    notifier: RtiNotifier,
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+) -> None:
     peer = writer.get_extra_info("peername")
     LOG.info("RTI connected from %s", peer)
+    await notifier.send(f"DT: RTI connected {peer}")
     session = NhdCtlSession()
 
     # Optional: push "endpoint online" notifications on connect (helps some drivers).
@@ -320,12 +759,127 @@ async def handle_client(cfg: Config, amx: AmxClient, reader: asyncio.StreamReade
             if line.startswith("matrix set "):
                 try:
                     ok, resp = await _handle_matrix_set(cfg, amx, line)
+                    if ok:
+                        parts = line.split()
+                        tx_token = parts[2]
+                        tx_alias: Optional[str]
+                        if tx_token.upper() == "NULL":
+                            tx_alias = None
+                        else:
+                            tx_obj = _lookup_tx(cfg, tx_token)
+                            tx_alias = tx_obj.alias if tx_obj is not None else None
+
+                        rx_aliases: List[str] = []
+                        for tok in parts[3:]:
+                            rx_obj = _lookup_rx(cfg, tok)
+                            if rx_obj is not None:
+                                rx_aliases.append(rx_obj.alias)
+                        state.set_all_media(tx_alias=tx_alias, rx_aliases=rx_aliases)
                 except Exception as e:
                     LOG.exception("AMX routing failed")
+                    await notifier.send(f"DT: ERROR routing failed: {e}")
                     ok, resp = False, f"error {e}"
                 writer.write(_crlf(resp if ok else "unknown command"))
                 await writer.drain()
                 continue
+
+            # Breakaway switching
+            if line.startswith("matrix ") and " set " in line:
+                parts = line.split()
+                # matrix <kind> set <TX|NULL> <RX...>
+                if len(parts) >= 5 and parts[0] == "matrix" and parts[2] == "set":
+                    kind = parts[1].lower()
+                    tx_token = parts[3]
+                    rx_tokens = parts[4:]
+
+                    tx_obj = _lookup_tx(cfg, tx_token)
+                    tx_alias = None
+                    if tx_obj is None:
+                        if tx_token.upper() != "NULL":
+                            writer.write(_crlf("unknown command"))
+                            await writer.drain()
+                            continue
+                    else:
+                        tx_alias = tx_obj.alias
+
+                    rx_aliases: List[str] = []
+                    for tok in rx_tokens:
+                        rx_obj = _lookup_rx(cfg, tok)
+                        if rx_obj is None:
+                            writer.write(_crlf("unknown command"))
+                            await writer.drain()
+                            break
+                        rx_aliases.append(rx_obj.alias)
+                    else:
+                        state.set_breakaway(kind=kind, tx_alias=tx_alias, rx_aliases=rx_aliases)
+
+                        # Only video breakaway affects AMX in our model
+                        if kind == "video" and tx_obj is not None:
+                            try:
+                                await asyncio.gather(
+                                    *(
+                                        amx.set_stream(
+                                            decoder_ip=_lookup_rx(cfg, a).amx_decoder_ip,  # type: ignore[arg-type]
+                                            stream=tx_obj.amx_stream,
+                                        )
+                                        for a in rx_aliases
+                                    ),
+                                    return_exceptions=False,
+                                )
+                            except Exception as e:
+                                LOG.exception("AMX routing failed")
+                                await notifier.send(f"DT: ERROR breakaway video route failed: {e}")
+                                writer.write(_crlf("unknown command"))
+                                await writer.drain()
+                                continue
+
+                        writer.write(_crlf(line))  # command mirror ack
+                        await writer.drain()
+                        continue
+
+            # Matrix query commands used for RTI feedback variables
+            if line.startswith("matrix ") and " get" in line:
+                parts = line.split()
+                # Examples:
+                # matrix video get [<RX...>]
+                # matrix audio get [<RX...>]
+                if len(parts) >= 3 and parts[0] == "matrix" and parts[2] == "get":
+                    kind = parts[1].lower()
+                    rx_tokens = parts[3:]
+                    rx_aliases: List[str] = []
+                    if rx_tokens:
+                        for tok in rx_tokens:
+                            rx_obj = _lookup_rx(cfg, tok)
+                            if rx_obj is None:
+                                writer.write(_crlf("unknown command"))
+                                await writer.drain()
+                                break
+                            rx_aliases.append(rx_obj.alias)
+                        else:
+                            # all rx parsed ok
+                            pass
+                    else:
+                        rx_aliases = list(cfg.rx_by_alias.keys())
+
+                    table = {
+                        "video": state.video,
+                        "audio": state.audio,
+                        "audio2": state.audio,
+                        "usb": state.usb,
+                        "serial": state.serial,
+                        "infrared": state.infrared,
+                    }.get(kind)
+                    if table is None:
+                        writer.write(_crlf("unknown command"))
+                        await writer.drain()
+                        continue
+
+                    for resp_line in _format_matrix_info(
+                        heading=f"matrix {kind}", mapping=table, rx_aliases=rx_aliases
+                    ):
+                        writer.write(_crlf(resp_line))
+                    await writer.drain()
+                    continue
 
             if line.startswith("config set session alias "):
                 parts = line.split()
@@ -349,26 +903,95 @@ async def handle_client(cfg: Config, amx: AmxClient, reader: asyncio.StreamReade
                 await writer.drain()
                 continue
 
+            # Safe mirrors / minimal responses for RTI driver feature surface.
+            # Video wall + multiview query commands (return empty lists rather than "unknown command")
+            if line.startswith(("scene get", "vw get", "wscene2 get")):
+                for resp_line in _handle_videowall_get(cfg, line):
+                    writer.write(_crlf(resp_line))
+                await writer.drain()
+                continue
+
+            if line.startswith(("mscene get", "mview get")):
+                for resp_line in _handle_multiview_get(cfg, line):
+                    writer.write(_crlf(resp_line))
+                await writer.drain()
+                continue
+
+            # Scene/multiview activation and edits: acknowledge success.
+            if line.startswith(
+                (
+                    "scene active ",
+                    "wscene2 active ",
+                    "vw active ",
+                    "mscene active ",
+                    "mscene change ",
+                    "mscene set ",
+                    "mview set ",
+                    "mview set audio ",
+                    "cec ",
+                    "infrared ",
+                    "serial ",
+                    "api ",
+                )
+            ):
+                # Some of these commands have defined response structure with success|failure.
+                if line.startswith(("mscene active ", "mscene change ", "mscene set ", "mview set ", "mview set audio ")):
+                    writer.write(_crlf(_as_success(line)))
+                else:
+                    writer.write(_crlf(line))
+                await writer.drain()
+                continue
+
             # Unknown command
             writer.write(_crlf("unknown command"))
             await writer.drain()
 
     finally:
         LOG.info("RTI disconnected from %s", peer)
+        await notifier.send(f"DT: RTI disconnected {peer}")
         writer.close()
         with contextlib.suppress(Exception):
             await writer.wait_closed()
 
 
 async def run_server(*, cfg: Config, listen: str, port: int) -> None:
-    amx = AmxClient(
-        decoder_port=cfg.amx_decoder_port,
-        connect_timeout_ms=cfg.amx_connect_timeout_ms,
-        command_timeout_ms=cfg.amx_command_timeout_ms,
+    if cfg.amx_bind_address:
+        LOG.info("AMX outbound connections will bind to %s (AVoIP NIC)", cfg.amx_bind_address)
+
+    if cfg.amx_dry_run:
+        LOG.warning("AMX dry-run enabled: no TCP connections will be made.")
+        amx: Any = DryRunAmxClient(decoder_port=cfg.amx_decoder_port)
+    elif cfg.amx_persistent:
+        LOG.warning("AMX persistent mode enabled: keeping per-decoder sockets open.")
+        amx = PersistentAmxClient(
+            decoder_port=cfg.amx_decoder_port,
+            connect_timeout_ms=cfg.amx_connect_timeout_ms,
+            command_timeout_ms=cfg.amx_command_timeout_ms,
+            keepalive_seconds=cfg.amx_keepalive_seconds,
+            bind_address=cfg.amx_bind_address,
+        )
+    else:
+        amx = AmxClient(
+            decoder_port=cfg.amx_decoder_port,
+            connect_timeout_ms=cfg.amx_connect_timeout_ms,
+            command_timeout_ms=cfg.amx_command_timeout_ms,
+            bind_address=cfg.amx_bind_address,
+        )
+
+    state = NhdState(cfg)
+
+    notifier = RtiNotifier(
+        enabled=cfg.rti_notify_enabled,
+        protocol=cfg.rti_notify_protocol,
+        host=cfg.rti_notify_host,
+        port=cfg.rti_notify_port,
+        bind_address=cfg.rti_notify_bind_address,
     )
+    await notifier.start()
+    await notifier.send("DT: service started")
 
     server = await asyncio.start_server(
-        lambda r, w: handle_client(cfg, amx, r, w),
+        lambda r, w: handle_client(cfg, amx, state, notifier, r, w),
         host=listen,
         port=port,
     )

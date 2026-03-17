@@ -1,0 +1,21 @@
+[Unit]
+Description=RTI DriverTranslator (WyreStorm NHD-CTL emulator -> AMX)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/drivertranslator
+ExecStart=/usr/bin/python3 -m drivertranslator --config /opt/drivertranslator/config.json --listen 0.0.0.0 --port 2323
+Restart=always
+RestartSec=2
+
+# Hardening (safe defaults; adjust if needed)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+
