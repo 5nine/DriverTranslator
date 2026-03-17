@@ -155,8 +155,50 @@ if [[ "$DO_CONFIG" -eq 1 ]]; then
     read -r -p "Offline emulator mode (no AMX TCP, log only)? (y/N): " OFFLINE
     OFFLINE="${OFFLINE:-N}"
 
+    read -r -p "Enable AMX verify-after-switch (checks STREAM via ?)? (Y/n): " AMX_VERIFY
+    AMX_VERIFY="${AMX_VERIFY:-Y}"
+    read -r -p "AMX verify timeout ms (default 800): " AMX_VERIFY_TO
+    AMX_VERIFY_TO="${AMX_VERIFY_TO:-800}"
+
+    read -r -p "Enable AMX self-test on start (connect to all decoders)? (Y/n): " AMX_SELFTEST
+    AMX_SELFTEST="${AMX_SELFTEST:-Y}"
+
+    read -r -p "Enable local HTTP status page? (Y/n): " HTTP_EN
+    HTTP_EN="${HTTP_EN:-Y}"
+    read -r -p "HTTP status bind IP (blank=control NIC IP, default 0.0.0.0): " HTTP_BIND
+    read -r -p "HTTP status port (default 8080): " HTTP_PORT
+    HTTP_PORT="${HTTP_PORT:-8080}"
+    read -r -p "HTTP log lines on page (default 200): " HTTP_LOGLINES
+    HTTP_LOGLINES="${HTTP_LOGLINES:-200}"
+
+    read -r -p "Enable RTI problems-only notify (Two Way Strings)? (y/N): " RTI_PROB
+    RTI_PROB="${RTI_PROB:-N}"
+    if [[ "$RTI_PROB" =~ ^[Yy]$ ]]; then
+      read -r -p "  RTI notify host/IP: " RTI_PROB_HOST
+      read -r -p "  RTI notify port (default 30001): " RTI_PROB_PORT
+      RTI_PROB_PORT="${RTI_PROB_PORT:-30001}"
+    else
+      RTI_PROB_HOST=""
+      RTI_PROB_PORT="0"
+    fi
+
+    read -r -p "Enable RTI status heartbeat (optional)? (y/N): " RTI_STAT
+    RTI_STAT="${RTI_STAT:-N}"
+    if [[ "$RTI_STAT" =~ ^[Yy]$ ]]; then
+      read -r -p "  RTI status host/IP: " RTI_STAT_HOST
+      read -r -p "  RTI status port (default 30002): " RTI_STAT_PORT
+      RTI_STAT_PORT="${RTI_STAT_PORT:-30002}"
+      read -r -p "  RTI status interval seconds (default 30): " RTI_STAT_INT
+      RTI_STAT_INT="${RTI_STAT_INT:-30}"
+    else
+      RTI_STAT_HOST=""
+      RTI_STAT_PORT="0"
+      RTI_STAT_INT="30"
+    fi
+
     # Which NIC/IP should AMX connections bind to? Prefer the AVoIP NIC IP if provided.
     AMX_BIND_IP=""
+    CTRL_BIND_IP=""
     if [[ -f "$NETWORK_CONFIG_PATH" ]]; then
       AMX_BIND_IP="$(python3 - <<PY
 import json
@@ -165,6 +207,17 @@ cfg=json.loads(Path("${NETWORK_CONFIG_PATH}").read_text())
 print(cfg.get("avoip",{}).get("ipv4",{}).get("address",""))
 PY
 )"
+      CTRL_BIND_IP="$(python3 - <<PY
+import json
+from pathlib import Path
+cfg=json.loads(Path("${NETWORK_CONFIG_PATH}").read_text())
+print(cfg.get("control",{}).get("ipv4",{}).get("address",""))
+PY
+)"
+    fi
+
+    if [[ -z "${HTTP_BIND:-}" ]]; then
+      HTTP_BIND="${CTRL_BIND_IP:-0.0.0.0}"
     fi
 
     python3 - <<PY
@@ -177,6 +230,20 @@ tx_start = ipaddress.IPv4Address("${TX_START_IP}")
 rx_start = ipaddress.IPv4Address("${RX_START_IP}")
 amx_bind = "${AMX_BIND_IP}".strip() or None
 offline = "${OFFLINE}".strip().lower() in ("y","yes","true","1","on")
+amx_verify = "${AMX_VERIFY}".strip().lower() not in ("n","no","false","0","off")
+amx_verify_to = int("${AMX_VERIFY_TO}")
+amx_selftest = "${AMX_SELFTEST}".strip().lower() not in ("n","no","false","0","off")
+http_enabled = "${HTTP_EN}".strip().lower() not in ("n","no","false","0","off")
+http_bind = "${HTTP_BIND}".strip() or "0.0.0.0"
+http_port = int("${HTTP_PORT}")
+http_log_lines = int("${HTTP_LOGLINES}")
+rti_prob_enabled = "${RTI_PROB}".strip().lower() in ("y","yes","true","1","on")
+rti_prob_host = "${RTI_PROB_HOST}".strip() or None
+rti_prob_port = int("${RTI_PROB_PORT}")
+rti_stat_enabled = "${RTI_STAT}".strip().lower() in ("y","yes","true","1","on")
+rti_stat_host = "${RTI_STAT_HOST}".strip() or None
+rti_stat_port = int("${RTI_STAT_PORT}")
+rti_stat_int = int("${RTI_STAT_INT}")
 
 tx = []
 for i in range(tx_count):
@@ -215,15 +282,15 @@ cfg = {
     "persistent": (not offline),
     "keepalive_seconds": 30,
     "bind_address": amx_bind,
-    "verify_after_set": True,
-    "verify_timeout_ms": 800,
+    "verify_after_set": amx_verify,
+    "verify_timeout_ms": amx_verify_to,
     "set_queue_limit": 1,
-    "self_test_on_start": True
+    "self_test_on_start": amx_selftest
   },
   "server": { "send_startup_notify_endpoint_online": True },
-  "rti_notify": { "enabled": False, "protocol": "udp", "host": None, "port": 0, "bind_address": None, "min_interval_seconds": 10, "repeat_suppression_seconds": 300 },
-  "rti_status": { "enabled": False, "protocol": "udp", "host": None, "port": 0, "bind_address": None, "interval_seconds": 30 },
-  "http_status": { "enabled": True, "bind": "0.0.0.0", "port": 8080, "log_lines": 200 }
+  "rti_notify": { "enabled": rti_prob_enabled, "protocol": "udp", "host": rti_prob_host, "port": rti_prob_port, "bind_address": None, "min_interval_seconds": 10, "repeat_suppression_seconds": 300 },
+  "rti_status": { "enabled": rti_stat_enabled, "protocol": "udp", "host": rti_stat_host, "port": rti_stat_port, "bind_address": None, "interval_seconds": rti_stat_int },
+  "http_status": { "enabled": http_enabled, "bind": http_bind, "port": http_port, "log_lines": http_log_lines }
 }
 
 Path("${CONFIG_PATH}").write_text(json.dumps(cfg, indent=2) + "\\n", encoding="utf-8")
