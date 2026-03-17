@@ -43,7 +43,9 @@
     "protocol": "udp",
     "host": "192.168.1.50",
     "port": 30001,
-    "bind_address": null
+    "bind_address": null,
+    "min_interval_seconds": 10,
+    "repeat_suppression_seconds": 300
   }
 }
 

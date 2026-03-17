@@ -3,6 +3,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -111,6 +112,8 @@ class Config:
     rti_notify_host: Optional[str]
     rti_notify_port: int
     rti_notify_bind_address: Optional[str]
+    rti_notify_min_interval_seconds: int
+    rti_notify_repeat_suppression_seconds: int
 
 
 def load_config(path: str) -> Config:
@@ -189,6 +192,10 @@ def load_config(path: str) -> Config:
         rti_notify_host=_bind_addr(rti_notify.get("host")),
         rti_notify_port=_as_int(rti_notify.get("port"), default=0),
         rti_notify_bind_address=_bind_addr(rti_notify.get("bind_address")),
+        rti_notify_min_interval_seconds=_as_int(rti_notify.get("min_interval_seconds"), default=10),
+        rti_notify_repeat_suppression_seconds=_as_int(
+            rti_notify.get("repeat_suppression_seconds"), default=300
+        ),
     )
 
 
@@ -201,6 +208,8 @@ class RtiNotifier:
         host: Optional[str],
         port: int,
         bind_address: Optional[str] = None,
+        min_interval_seconds: int = 10,
+        repeat_suppression_seconds: int = 300,
     ) -> None:
         self._enabled = enabled and bool(host) and int(port) > 0
         self._protocol = protocol
@@ -210,6 +219,10 @@ class RtiNotifier:
         self._udp_transport: Optional[asyncio.DatagramTransport] = None
         self._udp_ready = asyncio.Event()
         self._lock = asyncio.Lock()
+        self._min_interval = max(0, int(min_interval_seconds))
+        self._repeat_suppression = max(0, int(repeat_suppression_seconds))
+        self._last_sent_at: Dict[str, float] = {}
+        self._last_sent_msg: Dict[str, str] = {}
 
     async def start(self) -> None:
         if not self._enabled:
@@ -248,6 +261,28 @@ class RtiNotifier:
                     await writer.wait_closed()
             except Exception:
                 LOG.debug("RTI notify send failed", exc_info=True)
+
+    async def problem(self, key: str, message: str) -> None:
+        """
+        Problems-only notification with anti-spam:
+        - per-key minimum interval
+        - suppress identical messages for a longer window
+        """
+        if not self._enabled:
+            return
+        now = time.monotonic()
+        last_at = self._last_sent_at.get(key)
+        last_msg = self._last_sent_msg.get(key)
+
+        msg = message.strip()
+        if last_msg == msg and last_at is not None and (now - last_at) < self._repeat_suppression:
+            return
+        if last_at is not None and (now - last_at) < self._min_interval:
+            return
+
+        self._last_sent_at[key] = now
+        self._last_sent_msg[key] = msg
+        await self.send(msg)
 
 
 class AmxClient:
@@ -733,7 +768,6 @@ async def handle_client(
 ) -> None:
     peer = writer.get_extra_info("peername")
     LOG.info("RTI connected from %s", peer)
-    await notifier.send(f"DT: RTI connected {peer}")
     session = NhdCtlSession()
 
     # Optional: push "endpoint online" notifications on connect (helps some drivers).
@@ -777,7 +811,7 @@ async def handle_client(
                         state.set_all_media(tx_alias=tx_alias, rx_aliases=rx_aliases)
                 except Exception as e:
                     LOG.exception("AMX routing failed")
-                    await notifier.send(f"DT: ERROR routing failed: {e}")
+                    await notifier.problem("amx.route", f"DT: ERROR AMX route failed: {e}")
                     ok, resp = False, f"error {e}"
                 writer.write(_crlf(resp if ok else "unknown command"))
                 await writer.drain()
@@ -828,7 +862,9 @@ async def handle_client(
                                 )
                             except Exception as e:
                                 LOG.exception("AMX routing failed")
-                                await notifier.send(f"DT: ERROR breakaway video route failed: {e}")
+                                await notifier.problem(
+                                    "amx.breakaway.video", f"DT: ERROR AMX breakaway video route failed: {e}"
+                                )
                                 writer.write(_crlf("unknown command"))
                                 await writer.drain()
                                 continue
@@ -948,7 +984,6 @@ async def handle_client(
 
     finally:
         LOG.info("RTI disconnected from %s", peer)
-        await notifier.send(f"DT: RTI disconnected {peer}")
         writer.close()
         with contextlib.suppress(Exception):
             await writer.wait_closed()
@@ -986,9 +1021,10 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
         host=cfg.rti_notify_host,
         port=cfg.rti_notify_port,
         bind_address=cfg.rti_notify_bind_address,
+        min_interval_seconds=cfg.rti_notify_min_interval_seconds,
+        repeat_suppression_seconds=cfg.rti_notify_repeat_suppression_seconds,
     )
     await notifier.start()
-    await notifier.send("DT: service started")
 
     server = await asyncio.start_server(
         lambda r, w: handle_client(cfg, amx, state, notifier, r, w),

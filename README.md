@@ -105,6 +105,12 @@ Example config:
 
 `host` is the IP of the RTI processor (or whatever is running the “Two Way Strings” socket).
 
+Notes:
+- DriverTranslator only sends `rti_notify` messages for **problems/errors** (no spammy “connected” chatter).
+- Two anti-spam settings are available:
+  - `min_interval_seconds`: minimum time between messages (per error type)
+  - `repeat_suppression_seconds`: suppress identical repeats for longer
+
 ## Start automatically on boot (systemd)
 
 The installer (`./linux/bin/install_drivertranslator.sh`) installs and enables the systemd service for you.
