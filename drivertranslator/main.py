@@ -120,6 +120,9 @@ class Config:
     rti_status_port: int
     rti_status_bind_address: Optional[str]
     rti_status_interval_seconds: int
+    http_status_enabled: bool
+    http_status_bind: str
+    http_status_port: int
 
 
 def load_config(path: str) -> Config:
@@ -172,6 +175,7 @@ def load_config(path: str) -> Config:
     server = raw.get("server", {})
     rti_notify = raw.get("rti_notify", {})
     rti_status = raw.get("rti_status", {})
+    http_status = raw.get("http_status", {})
 
     tx_by_alias = {t.alias: t for t in txs}
     tx_by_hostname = {t.hostname: t for t in txs}
@@ -209,6 +213,9 @@ def load_config(path: str) -> Config:
         rti_status_port=_as_int(rti_status.get("port"), default=0),
         rti_status_bind_address=_bind_addr(rti_status.get("bind_address")),
         rti_status_interval_seconds=_as_int(rti_status.get("interval_seconds"), default=30),
+        http_status_enabled=_as_bool(http_status.get("enabled"), default=True),
+        http_status_bind=str(http_status.get("bind", "0.0.0.0")).strip() or "0.0.0.0",
+        http_status_port=_as_int(http_status.get("port"), default=8080),
     )
 
 
@@ -360,6 +367,116 @@ class StatusReporter:
             f"tx_total={tx_total} rx_total={rx_total}"
         )
         await self._notifier.send(msg)
+
+
+def _http_response(status: str, content_type: str, body: bytes) -> bytes:
+    headers = [
+        f"HTTP/1.1 {status}",
+        f"Content-Type: {content_type}",
+        f"Content-Length: {len(body)}",
+        "Connection: close",
+        "",
+        "",
+    ]
+    return "\r\n".join(headers).encode("ascii") + body
+
+
+def _build_status_snapshot(*, cfg: Config, health: HealthState, amx: Any, started_at: float) -> Dict[str, Any]:
+    now = time.monotonic()
+    mode = "dry_run" if cfg.amx_dry_run else ("persistent" if cfg.amx_persistent else "connect_close")
+
+    amx_connected = None
+    amx_total_known = None
+    if hasattr(amx, "connection_summary"):
+        try:
+            amx_connected, amx_total_known = amx.connection_summary()
+        except Exception:
+            amx_connected, amx_total_known = None, None
+
+    return {
+        "uptime_seconds": int(now - started_at),
+        "mode": mode,
+        "rti_clients": health.rti_clients,
+        "tx_total": len(cfg.tx_by_alias),
+        "rx_total": len(cfg.rx_by_alias),
+        "amx_connected": amx_connected,
+        "amx_total_known": amx_total_known,
+    }
+
+
+async def _handle_http_client(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    *,
+    cfg: Config,
+    health: HealthState,
+    amx: Any,
+    started_at: float,
+) -> None:
+    try:
+        data = await asyncio.wait_for(reader.read(4096), timeout=2.0)
+        if not data:
+            return
+        line = data.split(b"\r\n", 1)[0].decode("ascii", errors="replace")
+        parts = line.split()
+        if len(parts) < 2:
+            writer.write(_http_response("400 Bad Request", "text/plain", b"bad request"))
+            return
+        method, path = parts[0], parts[1]
+        if method != "GET":
+            writer.write(_http_response("405 Method Not Allowed", "text/plain", b"method not allowed"))
+            return
+
+        snapshot = _build_status_snapshot(cfg=cfg, health=health, amx=amx, started_at=started_at)
+
+        if path in ("/status", "/status.json"):
+            body = (json.dumps(snapshot, indent=2) + "\n").encode("utf-8")
+            writer.write(_http_response("200 OK", "application/json", body))
+            return
+
+        if path == "/" or path.startswith("/?"):
+            amx_conn = (
+                f"{snapshot['amx_connected']}/{max(snapshot['amx_total_known'] or 0, snapshot['rx_total'])}"
+                if snapshot["amx_connected"] is not None
+                else "n/a"
+            )
+            body = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>DriverTranslator Status</title>
+  <style>
+    body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }}
+    .card {{ max-width: 720px; padding: 16px 18px; border: 1px solid #ddd; border-radius: 10px; }}
+    .row {{ display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }}
+    .row:last-child {{ border-bottom: 0; }}
+    code {{ background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }}
+  </style>
+</head>
+<body>
+  <h2>DriverTranslator Status</h2>
+  <div class="card">
+    <div class="row"><div>Uptime</div><div><code>{snapshot['uptime_seconds']}s</code></div></div>
+    <div class="row"><div>Mode</div><div><code>{snapshot['mode']}</code></div></div>
+    <div class="row"><div>RTI clients</div><div><code>{snapshot['rti_clients']}</code></div></div>
+    <div class="row"><div>Configured TX/RX</div><div><code>{snapshot['tx_total']}/{snapshot['rx_total']}</code></div></div>
+    <div class="row"><div>AMX connections (persistent)</div><div><code>{amx_conn}</code></div></div>
+  </div>
+  <p>JSON: <a href="/status.json"><code>/status.json</code></a></p>
+</body>
+</html>
+""".encode("utf-8")
+            writer.write(_http_response("200 OK", "text/html; charset=utf-8", body))
+            return
+
+        writer.write(_http_response("404 Not Found", "text/plain", b"not found"))
+    finally:
+        with contextlib.suppress(Exception):
+            await writer.drain()
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
 
 
 class AmxClient:
@@ -1093,6 +1210,7 @@ async def handle_client(
 
 
 async def run_server(*, cfg: Config, listen: str, port: int) -> None:
+    started_at = time.monotonic()
     if cfg.amx_bind_address:
         LOG.info("AMX outbound connections will bind to %s (AVoIP NIC)", cfg.amx_bind_address)
 
@@ -1142,6 +1260,15 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
         cfg=cfg,
     )
     await status.start()
+
+    if cfg.http_status_enabled:
+        http_server = await asyncio.start_server(
+            lambda r, w: _handle_http_client(r, w, cfg=cfg, health=health, amx=amx, started_at=started_at),
+            host=cfg.http_status_bind,
+            port=cfg.http_status_port,
+        )
+        addrs = ", ".join(str(sock.getsockname()) for sock in (http_server.sockets or []))
+        LOG.info("HTTP status listening on %s", addrs)
 
     server = await asyncio.start_server(
         lambda r, w: handle_client(cfg, amx, state, notifier, health, r, w),

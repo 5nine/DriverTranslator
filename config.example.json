@@ -54,6 +54,11 @@
     "port": 30002,
     "bind_address": null,
     "interval_seconds": 30
+  },
+  "http_status": {
+    "enabled": true,
+    "bind": "0.0.0.0",
+    "port": 8080
   }
 }
 

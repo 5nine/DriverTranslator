@@ -54,6 +54,29 @@ bash ./linux/bin/monitor_drivertranslator.sh logs
 
 ---
 
+## Local status webpage (control network)
+
+DriverTranslator includes a small built-in web server for local status:
+
+- **URL**: `http://<control-nic-ip>:8080/`
+- **JSON**: `http://<control-nic-ip>:8080/status.json`
+
+Configure in `config.json`:
+
+```json
+{
+  "http_status": {
+    "enabled": true,
+    "bind": "192.168.1.100",
+    "port": 8080
+  }
+}
+```
+
+Set `bind` to your **control NIC** IP so it’s only reachable on the control network.
+
+---
+
 ## RTI feedback via “Two Way Strings”
 
 ### Problems-only notifications (`rti_notify`)
