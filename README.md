@@ -111,6 +111,28 @@ Notes:
   - `min_interval_seconds`: minimum time between messages (per error type)
   - `repeat_suppression_seconds`: suppress identical repeats for longer
 
+## RTI status channel (optional)
+
+If you want periodic “heartbeat” style status (separate from problems-only `rti_notify`), enable `rti_status`.
+
+Example:
+
+```json
+{
+  "rti_status": {
+    "enabled": true,
+    "protocol": "udp",
+    "host": "192.168.1.50",
+    "port": 30002,
+    "interval_seconds": 30
+  }
+}
+```
+
+Message format:
+
+`DTSTATUS: mode=persistent rti_clients=1 amx_connected=12/40 tx_total=10 rx_total=40`
+
 ## Start automatically on boot (systemd)
 
 The installer (`./linux/bin/install_drivertranslator.sh`) installs and enables the systemd service for you.

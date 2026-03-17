@@ -217,7 +217,8 @@ cfg = {
     "bind_address": amx_bind
   },
   "server": { "send_startup_notify_endpoint_online": True },
-  "rti_notify": { "enabled": False, "protocol": "udp", "host": None, "port": 0, "bind_address": None }
+  "rti_notify": { "enabled": False, "protocol": "udp", "host": None, "port": 0, "bind_address": None, "min_interval_seconds": 10, "repeat_suppression_seconds": 300 },
+  "rti_status": { "enabled": False, "protocol": "udp", "host": None, "port": 0, "bind_address": None, "interval_seconds": 30 }
 }
 
 Path("${CONFIG_PATH}").write_text(json.dumps(cfg, indent=2) + "\\n", encoding="utf-8")

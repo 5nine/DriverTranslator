@@ -114,6 +114,12 @@ class Config:
     rti_notify_bind_address: Optional[str]
     rti_notify_min_interval_seconds: int
     rti_notify_repeat_suppression_seconds: int
+    rti_status_enabled: bool
+    rti_status_protocol: str
+    rti_status_host: Optional[str]
+    rti_status_port: int
+    rti_status_bind_address: Optional[str]
+    rti_status_interval_seconds: int
 
 
 def load_config(path: str) -> Config:
@@ -165,6 +171,7 @@ def load_config(path: str) -> Config:
     amx = raw.get("amx", {})
     server = raw.get("server", {})
     rti_notify = raw.get("rti_notify", {})
+    rti_status = raw.get("rti_status", {})
 
     tx_by_alias = {t.alias: t for t in txs}
     tx_by_hostname = {t.hostname: t for t in txs}
@@ -196,6 +203,12 @@ def load_config(path: str) -> Config:
         rti_notify_repeat_suppression_seconds=_as_int(
             rti_notify.get("repeat_suppression_seconds"), default=300
         ),
+        rti_status_enabled=_as_bool(rti_status.get("enabled"), default=False),
+        rti_status_protocol=str(rti_status.get("protocol", "udp")).strip().lower(),
+        rti_status_host=_bind_addr(rti_status.get("host")),
+        rti_status_port=_as_int(rti_status.get("port"), default=0),
+        rti_status_bind_address=_bind_addr(rti_status.get("bind_address")),
+        rti_status_interval_seconds=_as_int(rti_status.get("interval_seconds"), default=30),
     )
 
 
@@ -283,6 +296,70 @@ class RtiNotifier:
         self._last_sent_at[key] = now
         self._last_sent_msg[key] = msg
         await self.send(msg)
+
+
+class StatusReporter:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        protocol: str,
+        host: Optional[str],
+        port: int,
+        bind_address: Optional[str],
+        interval_seconds: int,
+        health: HealthState,
+        amx: Any,
+        cfg: Config,
+    ) -> None:
+        self._enabled = enabled and bool(host) and int(port) > 0 and interval_seconds > 0
+        self._interval = max(1, int(interval_seconds))
+        self._health = health
+        self._amx = amx
+        self._cfg = cfg
+        self._notifier = RtiNotifier(
+            enabled=self._enabled,
+            protocol=protocol,
+            host=host,
+            port=port,
+            bind_address=bind_address,
+            min_interval_seconds=0,
+            repeat_suppression_seconds=0,
+        )
+        self._task: Optional[asyncio.Task[None]] = None
+
+    async def start(self) -> None:
+        if not self._enabled:
+            return
+        await self._notifier.start()
+        self._task = asyncio.create_task(self._loop(), name="dt-status-reporter")
+
+    async def _loop(self) -> None:
+        while True:
+            await asyncio.sleep(self._interval)
+            await self._send_status()
+
+    async def _send_status(self) -> None:
+        mode = "dry_run" if self._cfg.amx_dry_run else ("persistent" if self._cfg.amx_persistent else "connect_close")
+
+        amx_connected = 0
+        amx_total_known = 0
+        if hasattr(self._amx, "connection_summary"):
+            try:
+                amx_connected, amx_total_known = self._amx.connection_summary()
+            except Exception:
+                pass
+
+        # Report configured endpoints as the "system size" baseline.
+        tx_total = len(self._cfg.tx_by_alias)
+        rx_total = len(self._cfg.rx_by_alias)
+
+        msg = (
+            f"DTSTATUS: mode={mode} rti_clients={self._health.rti_clients} "
+            f"amx_connected={amx_connected}/{max(amx_total_known, rx_total)} "
+            f"tx_total={tx_total} rx_total={rx_total}"
+        )
+        await self._notifier.send(msg)
 
 
 class AmxClient:
@@ -405,6 +482,19 @@ class PersistentAmxClient:
                 w.start()
             return w
 
+    def connection_summary(self) -> Tuple[int, int]:
+        """
+        Returns (connected, total_known).
+        total_known only counts decoders we've attempted to use in this process.
+        """
+        connected = 0
+        total = 0
+        for w in self._workers.values():
+            total += 1
+            if w.is_connected:
+                connected += 1
+        return connected, total
+
 
 class _DecoderWorker:
     def __init__(
@@ -430,6 +520,7 @@ class _DecoderWorker:
         self._reader: Optional[asyncio.StreamReader] = None
         self._writer: Optional[asyncio.StreamWriter] = None
         self._connected_evt = asyncio.Event()
+        self.is_connected: bool = False
 
     def start(self) -> None:
         if self._task is None:
@@ -504,6 +595,7 @@ class _DecoderWorker:
     async def _reconnect(self) -> None:
         await self._close()
         self._connected_evt.clear()
+        self.is_connected = False
 
         try:
             reader, writer = await _open_connection(
@@ -520,6 +612,7 @@ class _DecoderWorker:
         self._reader = reader
         self._writer = writer
         self._connected_evt.set()
+        self.is_connected = True
 
     async def _close(self) -> None:
         if self._writer is not None:
@@ -528,6 +621,7 @@ class _DecoderWorker:
                 await self._writer.wait_closed()
         self._reader = None
         self._writer = None
+        self.is_connected = False
 
 
 class NhdCtlSession:
@@ -571,6 +665,11 @@ class NhdState:
             return
         for rx in rx_aliases:
             table[rx] = tx_alias
+
+
+class HealthState:
+    def __init__(self) -> None:
+        self.rti_clients: int = 0
 
 
 def _lookup_tx(cfg: Config, token: str) -> Optional[Tx]:
@@ -763,12 +862,14 @@ async def handle_client(
     amx: Any,
     state: NhdState,
     notifier: RtiNotifier,
+    health: HealthState,
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
 ) -> None:
     peer = writer.get_extra_info("peername")
     LOG.info("RTI connected from %s", peer)
     session = NhdCtlSession()
+    health.rti_clients += 1
 
     # Optional: push "endpoint online" notifications on connect (helps some drivers).
     if cfg.send_startup_notify_endpoint_online:
@@ -984,6 +1085,7 @@ async def handle_client(
 
     finally:
         LOG.info("RTI disconnected from %s", peer)
+        health.rti_clients = max(0, health.rti_clients - 1)
         writer.close()
         with contextlib.suppress(Exception):
             await writer.wait_closed()
@@ -1014,6 +1116,7 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
         )
 
     state = NhdState(cfg)
+    health = HealthState()
 
     notifier = RtiNotifier(
         enabled=cfg.rti_notify_enabled,
@@ -1026,8 +1129,21 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
     )
     await notifier.start()
 
+    status = StatusReporter(
+        enabled=cfg.rti_status_enabled,
+        protocol=cfg.rti_status_protocol,
+        host=cfg.rti_status_host,
+        port=cfg.rti_status_port,
+        bind_address=cfg.rti_status_bind_address,
+        interval_seconds=cfg.rti_status_interval_seconds,
+        health=health,
+        amx=amx,
+        cfg=cfg,
+    )
+    await status.start()
+
     server = await asyncio.start_server(
-        lambda r, w: handle_client(cfg, amx, state, notifier, r, w),
+        lambda r, w: handle_client(cfg, amx, state, notifier, health, r, w),
         host=listen,
         port=port,
     )
