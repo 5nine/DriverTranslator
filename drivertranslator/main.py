@@ -395,6 +395,22 @@ def _http_response(status: str, content_type: str, body: bytes) -> bytes:
     return "\r\n".join(headers).encode("ascii") + body
 
 
+def _format_uptime(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    parts: List[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours or days:
+        parts.append(f"{hours}h")
+    if minutes or hours or days:
+        parts.append(f"{minutes}m")
+    parts.append(f"{secs:02d}s")
+    return " ".join(parts)
+
+
 def _build_status_snapshot(*, cfg: Config, health: HealthState, amx: Any, started_at: float) -> Dict[str, Any]:
     now = time.monotonic()
     mode = "dry_run" if cfg.amx_dry_run else ("persistent" if cfg.amx_persistent else "connect_close")
@@ -407,8 +423,9 @@ def _build_status_snapshot(*, cfg: Config, health: HealthState, amx: Any, starte
         except Exception:
             amx_connected, amx_total_known = None, None
 
+    uptime_seconds = int(now - started_at)
     return {
-        "uptime_seconds": int(now - started_at),
+        "uptime_seconds": uptime_seconds,
         "mode": mode,
         "rti_clients": health.rti_clients,
         "tx_configured": len(cfg.tx_by_alias),
@@ -462,6 +479,7 @@ async def _handle_http_client(
             return
 
         if path == "/" or path.startswith("/?"):
+            uptime_h = _format_uptime(int(snapshot["uptime_seconds"]))
             amx_conn = (
                 f"{snapshot['amx_connected']}/{max(snapshot['amx_total_known'] or 0, snapshot['rx_configured'])}"
                 if snapshot["amx_connected"] is not None
@@ -475,19 +493,108 @@ async def _handle_http_client(
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>DriverTranslator Status</title>
   <style>
-    body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }}
-    .card {{ max-width: 720px; padding: 16px 18px; border: 1px solid #ddd; border-radius: 10px; }}
-    .row {{ display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }}
+    :root {{
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --fg: #111111;
+      --muted: #666666;
+      --card: #ffffff;
+      --border: #dddddd;
+      --row: #f0f0f0;
+      --code-bg: #f6f6f6;
+      --code-fg: #111111;
+      --log-bg: #0b1020;
+      --log-fg: #e6e6e6;
+      --link: #0b5fff;
+    }}
+
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --bg: #0b0d12;
+        --fg: #e9edf1;
+        --muted: #a9b1ba;
+        --card: #111521;
+        --border: #223046;
+        --row: #1a2233;
+        --code-bg: #0f1420;
+        --code-fg: #e9edf1;
+        --log-bg: #0b1020;
+        --log-fg: #e6e6e6;
+        --link: #8ab4ff;
+      }}
+    }}
+
+    [data-theme="light"] {{
+      --bg: #ffffff;
+      --fg: #111111;
+      --muted: #666666;
+      --card: #ffffff;
+      --border: #dddddd;
+      --row: #f0f0f0;
+      --code-bg: #f6f6f6;
+      --code-fg: #111111;
+      --log-bg: #0b1020;
+      --log-fg: #e6e6e6;
+      --link: #0b5fff;
+    }}
+
+    [data-theme="dark"] {{
+      --bg: #0b0d12;
+      --fg: #e9edf1;
+      --muted: #a9b1ba;
+      --card: #111521;
+      --border: #223046;
+      --row: #1a2233;
+      --code-bg: #0f1420;
+      --code-fg: #e9edf1;
+      --log-bg: #0b1020;
+      --log-fg: #e6e6e6;
+      --link: #8ab4ff;
+    }}
+
+    body {{
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      margin: 24px;
+      background: var(--bg);
+      color: var(--fg);
+    }}
+
+    a {{ color: var(--link); }}
+
+    .topbar {{
+      max-width: 720px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }}
+
+    .btn {{
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--fg);
+      padding: 6px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+    }}
+
+    .card {{ max-width: 720px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }}
+    .row {{ display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--row); }}
     .row:last-child {{ border-bottom: 0; }}
-    code {{ background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }}
-    pre {{ white-space: pre-wrap; background: #0b1020; color: #e6e6e6; padding: 12px; border-radius: 10px; overflow-x: auto; }}
-    .subtle {{ color: #666; font-size: 12px; }}
+    code {{ background: var(--code-bg); color: var(--code-fg); padding: 2px 6px; border-radius: 6px; }}
+    pre {{ white-space: pre-wrap; background: var(--log-bg); color: var(--log-fg); padding: 12px; border-radius: 10px; overflow-x: auto; }}
+    .subtle {{ color: var(--muted); font-size: 12px; }}
   </style>
 </head>
 <body>
-  <h2>DriverTranslator Status</h2>
+  <div class="topbar">
+    <h2 style="margin:0;">DriverTranslator Status</h2>
+    <button class="btn" id="themeBtn" type="button">Toggle theme</button>
+  </div>
   <div class="card">
-    <div class="row"><div>Uptime</div><div><code>{snapshot['uptime_seconds']}s</code></div></div>
+    <div class="row"><div>Uptime</div><div><code>{uptime_h}</code></div></div>
     <div class="row"><div>Mode</div><div><code>{snapshot['mode']}</code></div></div>
     <div class="row"><div>RTI clients</div><div><code>{snapshot['rti_clients']}</code></div></div>
     <div class="row"><div>Configured TX</div><div><code>{snapshot['tx_configured']}</code></div></div>
@@ -497,6 +604,31 @@ async def _handle_http_client(
   <p class="subtle">JSON: <a href="/status.json"><code>/status.json</code></a> • Logs JSON: <a href="/logs.json"><code>/logs.json</code></a></p>
   <h3>Recent logs</h3>
   <pre>{log_lines}</pre>
+  <script>
+    (function () {{
+      const btn = document.getElementById('themeBtn');
+      const root = document.documentElement;
+      const key = 'dt_theme';
+
+      function apply(theme) {{
+        if (!theme) {{
+          root.removeAttribute('data-theme');
+          return;
+        }}
+        root.setAttribute('data-theme', theme);
+      }}
+
+      const saved = localStorage.getItem(key);
+      if (saved === 'light' || saved === 'dark') apply(saved);
+
+      btn.addEventListener('click', () => {{
+        const current = root.getAttribute('data-theme');
+        const next = current === 'dark' ? 'light' : 'dark';
+        apply(next);
+        localStorage.setItem(key, next);
+      }});
+    }})();
+  </script>
 </body>
 </html>
 """.encode("utf-8")
