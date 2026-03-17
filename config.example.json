@@ -18,12 +18,12 @@
   },
   "endpoints": {
     "tx": [
-      { "alias": "source1", "hostname": "NHD-500-TX-001122334455", "ip": "192.168.10.11", "amx_stream": 1 },
-      { "alias": "source2", "hostname": "NHD-500-TX-001122334456", "ip": "192.168.10.12", "amx_stream": 2 }
+      { "alias": "IN1-BOX1", "hostname": "NHD-120-TX-001122334455", "ip": "192.168.10.11", "amx_stream": 1 },
+      { "alias": "IN2-BOX2", "hostname": "NHD-120-TX-001122334456", "ip": "192.168.10.12", "amx_stream": 2 }
     ],
     "rx": [
-      { "alias": "display1", "hostname": "NHD-500-RX-001122334457", "ip": "192.168.10.101", "amx_decoder_ip": "10.0.0.101" },
-      { "alias": "display2", "hostname": "NHD-500-RX-001122334458", "ip": "192.168.10.102", "amx_decoder_ip": "10.0.0.102" }
+      { "alias": "OUT1-TV1", "hostname": "NHD-120-RX-001122334457", "ip": "192.168.10.101", "amx_decoder_ip": "10.0.0.101" },
+      { "alias": "OUT2-TV2", "hostname": "NHD-120-RX-001122334458", "ip": "192.168.10.102", "amx_decoder_ip": "10.0.0.102" }
     ]
   },
   "amx": {

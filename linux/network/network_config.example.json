@@ -1,0 +1,12 @@
+{
+  "mode": "netplan",
+  "control": {
+    "match": { "interface": "eth0", "mac": null },
+    "ipv4": { "address": "192.168.1.100", "prefix": 24, "gateway": "192.168.1.1", "dns": ["192.168.1.1"] }
+  },
+  "avoip": {
+    "match": { "interface": "eth1", "mac": null },
+    "ipv4": { "address": "10.0.0.100", "prefix": 24, "gateway": null, "dns": [] }
+  }
+}
+

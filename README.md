@@ -26,7 +26,23 @@ The two PDFs in this folder are the source protocols:
 
 ## Quick start (Linux)
 
-1. Install Python 3.11+.
+### Recommended OS: Ubuntu Server (no desktop)
+
+Tested/targeted distro is **Ubuntu Server 24.04 LTS** (no desktop environment required). It’s a good fit because it ships with `systemd` and `netplan` by default.
+
+### Install (idempotent)
+
+On the Linux box:
+
+1. Install git and clone your repo:
+
+```bash
+sudo apt update
+sudo apt install -y git
+sudo git clone https://github.com/5nine/DriverTranslator.git /opt/drivertranslator
+cd /opt/drivertranslator
+```
+
 2. Copy the config:
 
 ```bash
@@ -34,13 +50,33 @@ cp config.example.json config.json
 ```
 
 3. Edit `config.json` to match your system (TX aliases → AMX stream ids, RX aliases → AMX decoder IPs).
-4. Run:
+
+4. Run the installer (safe to re-run any time):
 
 ```bash
-python3 -m drivertranslator --config ./config.json --listen 0.0.0.0 --port 2323
+sudo bash ./linux/bin/install_drivertranslator.sh
 ```
 
 5. In RTI, point the WyreStorm driver’s controller IP/port to this Linux machine (`2323` by default).
+
+### Update later (pull + restart in one go)
+
+Yes—an “executable” can absolutely do a `git pull` and update the running service.
+
+From the Linux box:
+
+```bash
+cd /opt/drivertranslator
+sudo bash ./linux/bin/update_drivertranslator.sh
+```
+
+### Monitor
+
+```bash
+cd /opt/drivertranslator
+bash ./linux/bin/monitor_drivertranslator.sh status
+bash ./linux/bin/monitor_drivertranslator.sh logs
+```
 
 ## RTI error/status messages (Two Way Strings driver)
 
@@ -69,26 +105,7 @@ Example config:
 
 ## Start automatically on boot (systemd)
 
-1. Copy the repo to Linux and place it at `/opt/drivertranslator`:
-
-```bash
-sudo mkdir -p /opt/drivertranslator
-sudo rsync -a --delete ./ /opt/drivertranslator/
-```
-
-2. Install the service:
-
-```bash
-sudo cp /opt/drivertranslator/linux/systemd/drivertranslator.service /etc/systemd/system/drivertranslator.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now drivertranslator.service
-```
-
-3. Check logs:
-
-```bash
-sudo journalctl -u drivertranslator.service -f
-```
+The installer (`./linux/bin/install_drivertranslator.sh`) installs and enables the systemd service for you.
 
 ## Emulator / bench mode (no AMX hardware required)
 
@@ -97,6 +114,7 @@ Use `config.emulator.json`, which:
 - Defines **10 TX** and **40 RX** using the RTI driver’s recommended alias conventions:
   - TX aliases: `IN<number>-<name>` (e.g. `IN1-BluRayPlayer`)
   - RX aliases: `OUT<number>-<name>` (e.g. `OUT1-LobbyTV`)
+- Uses **NHD-120 series** hostnames (e.g. `NHD-120-TX-...`, `NHD-120-RX-...`) to match the RTI driver expectations.
 - Uses made-up IPs starting at **`192.168.10.11`** for TX and **`192.168.10.101`** for RX
 - Enables `"amx": { "dry_run": true }` so **no TCP connections** are made; the service only logs what it would have sent to AMX.
 
@@ -167,4 +185,40 @@ On the live Linux box you can use **two physical NICs**: one for RTI (control) a
 
 - If `bind_address` is omitted or `null`, outbound AMX connections use the system default route (single-NIC or shared NIC).
 - Ensure the AVoIP NIC has a route to the decoder IPs (same subnet or correct gateway).
+
+## Optional: configure both NICs from a file (static IPs)
+
+If you want an installer-friendly way to set **static IPs on both NICs** and choose which physical NIC is “control” vs “AVoIP”, use:
+
+- `linux/network/network_config.example.json` (template)
+- `linux/network/nic_setup.py` (helper)
+
+### List NICs (choose by interface name or MAC)
+
+```bash
+python3 /opt/drivertranslator/linux/network/nic_setup.py list
+```
+
+This prints lines like:
+
+`eth0  00:11:22:33:44:55  192.168.1.10/24`
+
+### Apply (Ubuntu / Netplan)
+
+1. Copy the template and edit it:
+
+```bash
+cp /opt/drivertranslator/linux/network/network_config.example.json /opt/drivertranslator/network_config.json
+sudo nano /opt/drivertranslator/network_config.json
+```
+
+2. Apply it (writes `/etc/netplan/99-drivertranslator.yaml` and runs `netplan apply`):
+
+```bash
+sudo python3 /opt/drivertranslator/linux/network/nic_setup.py apply-netplan --config /opt/drivertranslator/network_config.json
+```
+
+Notes:
+- This assumes **control NIC** has the default gateway, and **AVoIP NIC** is same-subnet to AMX (often no gateway).
+- If you need advanced policy routing (two gateways), we can extend the tool to add it.
 
