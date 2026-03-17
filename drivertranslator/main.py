@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import contextlib
+import collections
 import json
 import logging
 import time
@@ -10,6 +11,17 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 LOG = logging.getLogger("drivertranslator")
+
+_LOG_RING: "collections.deque[str]" = collections.deque(maxlen=500)
+
+
+class _RingBufferLogHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+        except Exception:
+            msg = record.getMessage()
+        _LOG_RING.append(msg)
 
 
 async def _open_connection(
@@ -123,6 +135,7 @@ class Config:
     http_status_enabled: bool
     http_status_bind: str
     http_status_port: int
+    http_status_log_lines: int
 
 
 def load_config(path: str) -> Config:
@@ -216,6 +229,7 @@ def load_config(path: str) -> Config:
         http_status_enabled=_as_bool(http_status.get("enabled"), default=True),
         http_status_bind=str(http_status.get("bind", "0.0.0.0")).strip() or "0.0.0.0",
         http_status_port=_as_int(http_status.get("port"), default=8080),
+        http_status_log_lines=_as_int(http_status.get("log_lines"), default=200),
     )
 
 
@@ -397,11 +411,17 @@ def _build_status_snapshot(*, cfg: Config, health: HealthState, amx: Any, starte
         "uptime_seconds": int(now - started_at),
         "mode": mode,
         "rti_clients": health.rti_clients,
-        "tx_total": len(cfg.tx_by_alias),
-        "rx_total": len(cfg.rx_by_alias),
+        "tx_configured": len(cfg.tx_by_alias),
+        "rx_configured": len(cfg.rx_by_alias),
         "amx_connected": amx_connected,
         "amx_total_known": amx_total_known,
     }
+
+def _get_log_tail(n: int) -> List[str]:
+    n = max(0, min(int(n), 500))
+    if n == 0:
+        return []
+    return list(_LOG_RING)[-n:]
 
 
 async def _handle_http_client(
@@ -434,12 +454,20 @@ async def _handle_http_client(
             writer.write(_http_response("200 OK", "application/json", body))
             return
 
+        if path in ("/logs", "/logs.json"):
+            body = (json.dumps({"lines": _get_log_tail(cfg.http_status_log_lines)}, indent=2) + "\n").encode(
+                "utf-8"
+            )
+            writer.write(_http_response("200 OK", "application/json", body))
+            return
+
         if path == "/" or path.startswith("/?"):
             amx_conn = (
-                f"{snapshot['amx_connected']}/{max(snapshot['amx_total_known'] or 0, snapshot['rx_total'])}"
+                f"{snapshot['amx_connected']}/{max(snapshot['amx_total_known'] or 0, snapshot['rx_configured'])}"
                 if snapshot["amx_connected"] is not None
                 else "n/a"
             )
+            log_lines = "\n".join(_get_log_tail(cfg.http_status_log_lines))
             body = f"""<!doctype html>
 <html>
 <head>
@@ -452,6 +480,8 @@ async def _handle_http_client(
     .row {{ display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }}
     .row:last-child {{ border-bottom: 0; }}
     code {{ background: #f6f6f6; padding: 2px 6px; border-radius: 6px; }}
+    pre {{ white-space: pre-wrap; background: #0b1020; color: #e6e6e6; padding: 12px; border-radius: 10px; overflow-x: auto; }}
+    .subtle {{ color: #666; font-size: 12px; }}
   </style>
 </head>
 <body>
@@ -460,10 +490,13 @@ async def _handle_http_client(
     <div class="row"><div>Uptime</div><div><code>{snapshot['uptime_seconds']}s</code></div></div>
     <div class="row"><div>Mode</div><div><code>{snapshot['mode']}</code></div></div>
     <div class="row"><div>RTI clients</div><div><code>{snapshot['rti_clients']}</code></div></div>
-    <div class="row"><div>Configured TX/RX</div><div><code>{snapshot['tx_total']}/{snapshot['rx_total']}</code></div></div>
+    <div class="row"><div>Configured TX</div><div><code>{snapshot['tx_configured']}</code></div></div>
+    <div class="row"><div>Configured RX</div><div><code>{snapshot['rx_configured']}</code></div></div>
     <div class="row"><div>AMX connections (persistent)</div><div><code>{amx_conn}</code></div></div>
   </div>
-  <p>JSON: <a href="/status.json"><code>/status.json</code></a></p>
+  <p class="subtle">JSON: <a href="/status.json"><code>/status.json</code></a> • Logs JSON: <a href="/logs.json"><code>/logs.json</code></a></p>
+  <h3>Recent logs</h3>
+  <pre>{log_lines}</pre>
 </body>
 </html>
 """.encode("utf-8")
@@ -1295,6 +1328,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         level=getattr(logging, str(args.log_level).upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    ring = _RingBufferLogHandler()
+    ring.setLevel(logging.DEBUG)
+    ring.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.getLogger().addHandler(ring)
 
     cfg = load_config(args.config)
 

@@ -60,6 +60,7 @@ DriverTranslator includes a small built-in web server for local status:
 
 - **URL**: `http://<control-nic-ip>:8080/`
 - **JSON**: `http://<control-nic-ip>:8080/status.json`
+- **Logs (JSON)**: `http://<control-nic-ip>:8080/logs.json`
 
 Configure in `config.json`:
 
@@ -68,7 +69,8 @@ Configure in `config.json`:
   "http_status": {
     "enabled": true,
     "bind": "192.168.1.100",
-    "port": 8080
+    "port": 8080,
+    "log_lines": 200
   }
 }
 ```

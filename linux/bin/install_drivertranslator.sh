@@ -219,7 +219,7 @@ cfg = {
   "server": { "send_startup_notify_endpoint_online": True },
   "rti_notify": { "enabled": False, "protocol": "udp", "host": None, "port": 0, "bind_address": None, "min_interval_seconds": 10, "repeat_suppression_seconds": 300 },
   "rti_status": { "enabled": False, "protocol": "udp", "host": None, "port": 0, "bind_address": None, "interval_seconds": 30 },
-  "http_status": { "enabled": True, "bind": "0.0.0.0", "port": 8080 }
+  "http_status": { "enabled": True, "bind": "0.0.0.0", "port": 8080, "log_lines": 200 }
 }
 
 Path("${CONFIG_PATH}").write_text(json.dumps(cfg, indent=2) + "\\n", encoding="utf-8")
