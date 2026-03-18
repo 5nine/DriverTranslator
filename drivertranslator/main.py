@@ -893,6 +893,8 @@ async def _handle_http_client(
                     writer.write(_http_response("403 Forbidden", "text/plain", b"forbidden"))
                 return
 
+            ctl_via = "status_page" if params.get("ui_sess") else "http_api"
+
             if path.startswith("/control/set"):
                 key = params.get("key", "")
                 value = params.get("value", "")
@@ -903,6 +905,12 @@ async def _handle_http_client(
                     else:
                         await runtime.set_int(key, int(value))
                 except Exception:
+                    LOG.warning(
+                        "HTTP control [source=%s]: set rejected key=%r value=%r",
+                        ctl_via,
+                        key,
+                        value,
+                    )
                     bad_msg = (
                         "Expected key amx_verify_after_set or rti_status_enabled with true/false, "
                         "or amx_verify_timeout_ms with a number (100–5000)."
@@ -965,6 +973,15 @@ async def _handle_http_client(
                 else:
                     body = (json.dumps(snap, indent=2) + "\n").encode("utf-8")
                     writer.write(_http_response("200 OK", "application/json", body))
+                LOG.info(
+                    "HTTP control [source=%s]: set %s=%r (verify_after_set=%s verify_timeout_ms=%s rti_status=%s)",
+                    ctl_via,
+                    key,
+                    snap.get(key),
+                    snap.get("amx_verify_after_set"),
+                    snap.get("amx_verify_timeout_ms"),
+                    snap.get("rti_status_enabled"),
+                )
                 return
 
             if path.startswith("/control/selftest"):
@@ -972,12 +989,19 @@ async def _handle_http_client(
                 total = int(res.get("total") or 0)
                 ok_n = int(res.get("ok") or 0)
                 all_ok = total == 0 or ok_n == total
+                unr = res.get("unreachable") or []
+                LOG.info(
+                    "HTTP control [source=%s]: self-test %s/%s decoders reachable%s",
+                    ctl_via,
+                    ok_n,
+                    total,
+                    f" unreachable={unr!r}" if unr else "",
+                )
                 if _params_want_html(params):
                     if total == 0:
                         paras = ["No RX / decoders are configured in this profile."]
                     else:
                         paras = [f"TCP connect to port {cfg.amx_decoder_port}: {ok_n} of {total} reachable."]
-                        unr = res.get("unreachable") or []
                         if unr:
                             paras.append("Unreachable: " + ", ".join(str(x) for x in unr))
                         else:
@@ -1018,7 +1042,8 @@ async def _handle_http_client(
                 else:
                     body = (json.dumps({"ok": True, "action": "rebooting"}, indent=2) + "\n").encode("utf-8")
                     writer.write(_http_response("200 OK", "application/json", body))
-                asyncio.create_task(_do_reboot(reason="http_basic_auth"))
+                LOG.warning("HTTP control [source=%s]: host reboot requested", ctl_via)
+                asyncio.create_task(_do_reboot(reason=f"http_control:{ctl_via}"))
                 return
 
             writer.write(_http_response("404 Not Found", "text/plain", b"not found"))
