@@ -95,6 +95,7 @@ Configure in `config.json`:
 Set `bind` to your **control NIC** IP so it’s only reachable on the control network.
 
 - The status webpage requires **Basic auth**. Set `http_status.password` (installer default: `1234`).
+- The status page **reloads every 5 seconds** while the browser tab is visible (matrix, logs, overview stay current).
 - Web controls (including **reboot**) are available under the page’s **Controls** section after you log in.
 - If `http_status.control_token` is set, control endpoints also require `token=...` in the URL (optional extra safety).
 
