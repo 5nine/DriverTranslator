@@ -780,6 +780,41 @@ def _build_status_snapshot(*, cfg: Config, health: HealthState, amx: Any, starte
         "amx_total_known": amx_total_known,
     }
 
+
+def _build_live_payload(
+    *,
+    cfg: Config,
+    health: HealthState,
+    amx: Any,
+    state: NhdState,
+    started_at: float,
+    http_log_lines: int,
+) -> Dict[str, Any]:
+    """Snapshot for status page auto-refresh (matrix, logs, overview)."""
+    snap = _build_status_snapshot(cfg=cfg, health=health, amx=amx, started_at=started_at)
+    amx_conn = (
+        f"{snap['amx_connected']}/{max(snap['amx_total_known'] or 0, snap['rx_configured'])}"
+        if snap["amx_connected"] is not None
+        else "n/a"
+    )
+    matrix: List[Dict[str, Any]] = []
+    for rx_alias in sorted(cfg.rx_by_alias.keys(), key=_rx_alias_sort_key):
+        tx_alias = state.video.get(rx_alias) or "NULL"
+        online = bool(state.rx_online.get(rx_alias, True))
+        matrix.append({"rx": rx_alias, "tx": tx_alias, "online": online})
+    return {
+        "uptime_fmt": _format_uptime(int(snap["uptime_seconds"])),
+        "uptime_seconds": snap["uptime_seconds"],
+        "mode": snap["mode"],
+        "rti_clients": snap["rti_clients"],
+        "tx_configured": snap["tx_configured"],
+        "rx_configured": snap["rx_configured"],
+        "amx_conn": amx_conn,
+        "matrix": matrix,
+        "lines": _get_log_tail(http_log_lines),
+    }
+
+
 def _get_log_tail(n: int) -> List[str]:
     n = max(0, min(int(n), 500))
     if n == 0:
@@ -815,14 +850,15 @@ async def _handle_http_client(
             return
         method, path = parts[0], parts[1]
         path_only, early_params = _http_parse_path_params(path)
-        control_via_ui = path_only.startswith("/control/") and _http_ui_sess_valid(
-            early_params.get("ui_sess", "")
+        _ui_ok = _http_ui_sess_valid(early_params.get("ui_sess", ""))
+        bypass_auth_ui = _ui_ok and (
+            path_only.startswith("/control/") or path_only == "/live.json"
         )
 
-        # Require Basic auth (except /control/* with valid ui_sess from this session's status page).
+        # Require Basic auth (except status-page session: /control/* and /live.json with valid ui_sess).
         if cfg.http_status_password:
             pw = _parse_basic_auth_password(data)
-            if pw != cfg.http_status_password and not control_via_ui:
+            if pw != cfg.http_status_password and not bypass_auth_ui:
                 writer.write(_http_unauthorized())
                 return
 
@@ -843,6 +879,19 @@ async def _handle_http_client(
             body = (json.dumps({"lines": _get_log_tail(rt["http_log_lines"])}, indent=2) + "\n").encode(
                 "utf-8"
             )
+            writer.write(_http_response("200 OK", "application/json", body))
+            return
+
+        if path_only == "/live.json":
+            live = _build_live_payload(
+                cfg=cfg,
+                health=health,
+                amx=amx,
+                state=state,
+                started_at=started_at,
+                http_log_lines=int(rt["http_log_lines"]),
+            )
+            body = (json.dumps(live, indent=2) + "\n").encode("utf-8")
             writer.write(_http_response("200 OK", "application/json", body))
             return
 
@@ -1360,24 +1409,26 @@ async def _handle_http_client(
   <div class="topbar">
     <div class="brand">
       <h1>DriverTranslator</h1>
-      <span>Status &amp; controls</span>
+      <span>Status &amp; controls · matrix &amp; logs refresh every 3s while this tab is visible</span>
     </div>
     <button class="btn" id="themeBtn" type="button">Theme</button>
   </div>
+  <p id="dtLiveWarn" class="subtle" hidden style="margin-top:-12px;margin-bottom:8px;color:#b45309;"></p>
 
   <div class="section-title">Overview</div>
   <div class="card">
-    <div class="row"><div>Uptime</div><div><code>{uptime_h}</code></div></div>
-    <div class="row"><div>Mode</div><div><code>{snapshot['mode']}</code></div></div>
-    <div class="row"><div>RTI clients</div><div><code>{snapshot['rti_clients']}</code></div></div>
-    <div class="row"><div>Configured TX</div><div><code>{snapshot['tx_configured']}</code></div></div>
-    <div class="row"><div>Configured RX</div><div><code>{snapshot['rx_configured']}</code></div></div>
-    <div class="row"><div>AMX connections</div><div><code>{amx_conn}</code></div></div>
+    <div class="row"><div>Uptime</div><div><code id="dtOvUptime">{uptime_h}</code></div></div>
+    <div class="row"><div>Mode</div><div><code id="dtOvMode">{snapshot['mode']}</code></div></div>
+    <div class="row"><div>RTI clients</div><div><code id="dtOvRti">{snapshot['rti_clients']}</code></div></div>
+    <div class="row"><div>Configured TX</div><div><code id="dtOvTx">{snapshot['tx_configured']}</code></div></div>
+    <div class="row"><div>Configured RX</div><div><code id="dtOvRx">{snapshot['rx_configured']}</code></div></div>
+    <div class="row"><div>AMX connections</div><div><code id="dtOvAmx">{amx_conn}</code></div></div>
   </div>
 
   <div class="links-bar">
     <a href="/status.json">status.json</a>
     <a href="/logs.json">logs.json</a>
+    <a href="/live.json">live.json</a>
     <a href="/control.json">control.json</a>
   </div>
 
@@ -1421,14 +1472,14 @@ async def _handle_http_client(
   <div class="table-wrap">
   <table>
     <thead><tr><th>RX (Output)</th><th>TX (Input)</th><th>Status</th></tr></thead>
-    <tbody>
+    <tbody id="dtMatrixBody">
       {route_html}
     </tbody>
   </table>
   </div>
 
   <div class="section-title">Recent logs</div>
-  <pre>{log_lines}</pre>
+  <pre id="dtLogPre">{log_lines}</pre>
 
   <div id="dtModal" class="dt-modal" hidden>
     <div class="dt-modal-backdrop" id="dtModalBackdrop"></div>
@@ -1630,6 +1681,71 @@ async def _handle_http_client(
         applyTheme(next);
         localStorage.setItem(themeKey, next);
       }});
+
+      const LIVE_MS = 3000;
+      function liveUrl() {{
+        return '/live.json?ui_sess=' + encodeURIComponent(DT_UI.sess);
+      }}
+      function escHtml(s) {{
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }}
+      function renderMatrix(rows) {{
+        const tb = document.getElementById('dtMatrixBody');
+        if (!tb || !rows) return;
+        tb.innerHTML = rows.map((r) => {{
+          const st = r.online ? 'ok' : 'bad';
+          const lab = r.online ? 'ONLINE' : 'OFFLINE';
+          return '<tr><td><code>' + escHtml(r.rx) + '</code></td><td><code>' + escHtml(r.tx) + '</code></td><td class="' + st + '"><b>' + lab + '</b></td></tr>';
+        }}).join('');
+      }}
+      let liveTimer = null;
+      async function refreshLive() {{
+        try {{
+          const r = await fetch(liveUrl());
+          if (r.status === 401) {{
+            if (liveTimer) clearInterval(liveTimer);
+            liveTimer = null;
+            const w = document.getElementById('dtLiveWarn');
+            if (w) {{ w.removeAttribute('hidden'); w.textContent = 'Live updates stopped (session expired). Refresh the page to reconnect.'; }}
+            return;
+          }}
+          if (!r.ok) return;
+          const d = await r.json();
+          const u = document.getElementById('dtOvUptime');
+          if (u && d.uptime_fmt) u.textContent = d.uptime_fmt;
+          const m = document.getElementById('dtOvMode');
+          if (m && d.mode != null) m.textContent = d.mode;
+          const rt = document.getElementById('dtOvRti');
+          if (rt && d.rti_clients != null) rt.textContent = d.rti_clients;
+          const tx = document.getElementById('dtOvTx');
+          if (tx && d.tx_configured != null) tx.textContent = d.tx_configured;
+          const rx = document.getElementById('dtOvRx');
+          if (rx && d.rx_configured != null) rx.textContent = d.rx_configured;
+          const ax = document.getElementById('dtOvAmx');
+          if (ax && d.amx_conn) ax.textContent = d.amx_conn;
+          renderMatrix(d.matrix);
+          const pre = document.getElementById('dtLogPre');
+          if (pre && Array.isArray(d.lines)) pre.textContent = d.lines.join(String.fromCharCode(10));
+        }} catch (e) {{}}
+      }}
+      function startLive() {{
+        if (liveTimer) return;
+        liveTimer = setInterval(refreshLive, LIVE_MS);
+      }}
+      function stopLive() {{
+        if (liveTimer) clearInterval(liveTimer);
+        liveTimer = null;
+      }}
+      document.addEventListener('visibilitychange', () => {{
+        if (document.hidden) stopLive();
+        else {{ refreshLive(); startLive(); }}
+      }});
+      setTimeout(refreshLive, 600);
+      if (!document.hidden) startLive();
     }})();
   </script>
 </body>
