@@ -86,29 +86,51 @@ Configure in `config.json`:
     "bind": "192.168.1.100",
     "port": 8080,
     "log_lines": 200,
-    "control_token": null
+    "control_token": null,
+    "password": "1234"
   }
 }
 ```
 
 Set `bind` to your **control NIC** IP so it’s only reachable on the control network.
 
-If you want to allow changing runtime settings from the page (Controls section), set a `control_token` and include it in control URLs (example):  
-`/control/set?key=amx_verify_after_set&value=false&token=YOURTOKEN`
-
-The status webpage requires **Basic auth**. Set `http_status.password` (installer default: `1234`).
+- The status webpage requires **Basic auth**. Set `http_status.password` (installer default: `1234`).
+- Web controls (including **reboot**) are available under the page’s **Controls** section after you log in.
+- If `http_status.control_token` is set, control endpoints also require `token=...` in the URL (optional extra safety).
 
 ---
 
-## RTI feedback via “Two Way Strings”
+## RTI setup
 
-### Problems-only notifications (`rti_notify`)
+### WyreStorm NetworkHD (NHD-CTL) driver
+
+Point the RTI WyreStorm NetworkHD “controller” connection to the DriverTranslator host:
+
+- **IP**: DriverTranslator host (control NIC)
+- **Port**: `2323` (TCP)
+
+### Two Way Strings v2.7 (recommended)
+
+Use RTI’s **Two Way Strings** driver for:
+
+- Receiving **problems-only** notifications (`rti_notify`) via UDP
+- (Optional) Receiving **heartbeat status** (`rti_status`) via UDP
+- Sending the **UDP reboot** command (`rti_control`) to the DriverTranslator host
+
+Notes from the Two Way Strings docs that matter here:
+
+- **UDP mode is connectionless** (one-way send/receive)
+- The wildcard sequence **`$$*$$`** can be used in RX strings to match variable content
+
+#### Problems-only notifications (`rti_notify`) (RX into RTI)
 
 `rti_notify` is for **errors/problems only** (rate limited + deduped so RTI won’t get spammed).
 
-- Recommended: configure the RTI “Two Way Strings” driver as **Network (UDP)**.
+- Configure a Two Way Strings driver instance as **Network (UDP)**.
 - Set the driver **Local Port** to match `rti_notify.port`.
-- Add RX strings like `DT: ERROR$$*$$` to trigger events/variables.
+- Add RX strings that match the messages DriverTranslator sends, for example:
+  - `DT: ERROR$$*$$` (catches all errors)
+  - `DT: ERROR AMX$$*$$` (only AMX-related errors)
 
 Example `config.json`:
 
@@ -125,7 +147,7 @@ Example `config.json`:
 }
 ```
 
-### Periodic status / heartbeat (`rti_status`, optional)
+#### Periodic status / heartbeat (`rti_status`, optional) (RX into RTI)
 
 If you want a separate, periodic status line (not errors), enable `rti_status`.
 
@@ -147,7 +169,11 @@ Message format:
 
 `DTSTATUS: mode=persistent rti_clients=1 amx_connected=12/40 tx_total=10 rx_total=40`
 
-### Optional UDP control (reboot)
+Suggested RX string for the Two Way Strings driver:
+
+- `DTSTATUS:$$*$$`
+
+#### Optional UDP control (reboot) (TX from RTI)
 
 Enable UDP reboot control (no token; exact string match). Recommended only on a private network.
 
@@ -164,7 +190,12 @@ Example `config.json`:
 }
 ```
 
-Send this exact UDP payload from RTI:
+In RTI, create a Two Way Strings driver instance configured as **Network (UDP)** that sends to:
+
+- **Remote IP**: DriverTranslator host (control NIC)
+- **Remote Port**: `rti_control.port` (example: `30003`)
+
+Then send this exact UDP payload:
 
 - `DT REBOOT`
 
