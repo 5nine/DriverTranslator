@@ -360,6 +360,10 @@ class RtiNotifier:
         self._repeat_suppression = max(0, int(repeat_suppression_seconds))
         self._last_sent_at: Dict[str, float] = {}
         self._last_sent_msg: Dict[str, str] = {}
+        self._problems: Optional[ProblemState] = None
+
+    def attach_problem_state(self, problems: ProblemState) -> None:
+        self._problems = problems
 
     async def start(self) -> None:
         if not self._enabled:
@@ -419,6 +423,11 @@ class RtiNotifier:
 
         self._last_sent_at[key] = now
         self._last_sent_msg[key] = msg
+        # Always log locally (and on the status page log tail).
+        LOG.error("(rti_notify) %s", msg)
+        if self._problems is not None:
+            with contextlib.suppress(Exception):
+                await self._problems.record(key=key, message=msg)
         await self.send(msg)
 
 
@@ -608,6 +617,7 @@ async def _handle_http_client(
     amx: Any,
     state: NhdState,
     runtime: RuntimeSettings,
+    problems: ProblemState,
     started_at: float,
 ) -> None:
     try:
@@ -630,6 +640,7 @@ async def _handle_http_client(
 
         snapshot = _build_status_snapshot(cfg=cfg, health=health, amx=amx, started_at=started_at)
         rt = await runtime.snapshot()
+        prob = await problems.snapshot()
 
         if path in ("/status", "/status.json"):
             body = (json.dumps(snapshot, indent=2) + "\n").encode("utf-8")
@@ -645,6 +656,11 @@ async def _handle_http_client(
 
         if path in ("/control", "/control.json"):
             body = (json.dumps(rt, indent=2) + "\n").encode("utf-8")
+            writer.write(_http_response("200 OK", "application/json", body))
+            return
+
+        if path in ("/problems", "/problems.json"):
+            body = (json.dumps({"problems": prob}, indent=2) + "\n").encode("utf-8")
             writer.write(_http_response("200 OK", "application/json", body))
             return
 
@@ -823,7 +839,12 @@ async def _handle_http_client(
     <div class="row"><div>Configured RX</div><div><code>{snapshot['rx_configured']}</code></div></div>
     <div class="row"><div>AMX connections (persistent)</div><div><code>{amx_conn}</code></div></div>
   </div>
-  <p class="subtle">JSON: <a href="/status.json"><code>/status.json</code></a> • Logs JSON: <a href="/logs.json"><code>/logs.json</code></a> • Controls JSON: <a href="/control.json"><code>/control.json</code></a></p>
+  <p class="subtle">JSON: <a href="/status.json"><code>/status.json</code></a> • Logs JSON: <a href="/logs.json"><code>/logs.json</code></a> • Controls JSON: <a href="/control.json"><code>/control.json</code></a> • Problems JSON: <a href="/problems.json"><code>/problems.json</code></a></p>
+  <h3>Problems</h3>
+  <div class="card">
+    <div class="row"><div>Recent problems</div><div><code>{len(prob)}</code></div></div>
+    <pre>{'\\n'.join(p.get('message','') for p in prob[-10:]) if prob else 'none'}</pre>
+  </div>
   <h3>Controls</h3>
   <div class="card">
     <div class="row"><div>AMX verify after switch</div><div><code>{str(rt['amx_verify_after_set']).lower()}</code> <a href="/control/set?key=amx_verify_after_set&value={'false' if rt['amx_verify_after_set'] else 'true'}">toggle</a></div></div>
@@ -1375,6 +1396,23 @@ class NhdState:
 class HealthState:
     def __init__(self) -> None:
         self.rti_clients: int = 0
+
+
+class ProblemState:
+    def __init__(self, *, max_lines: int = 50) -> None:
+        self._max = max(1, int(max_lines))
+        self._items: collections.deque[Dict[str, Any]] = collections.deque(maxlen=self._max)
+        self._lock = asyncio.Lock()
+
+    async def record(self, *, key: str, message: str) -> None:
+        async with self._lock:
+            self._items.append(
+                {"ts": int(time.time()), "key": key, "message": message.strip()}
+            )
+
+    async def snapshot(self) -> List[Dict[str, Any]]:
+        async with self._lock:
+            return list(self._items)
 
 
 class RuntimeSettings:
@@ -1931,6 +1969,7 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
     state = NhdState(cfg)
     health = HealthState()
     runtime = RuntimeSettings(cfg)
+    problems = ProblemState()
 
     notifier = RtiNotifier(
         enabled=cfg.rti_notify_enabled,
@@ -1941,6 +1980,7 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
         min_interval_seconds=cfg.rti_notify_min_interval_seconds,
         repeat_suppression_seconds=cfg.rti_notify_repeat_suppression_seconds,
     )
+    notifier.attach_problem_state(problems)
     await notifier.start()
 
     # Optional AMX self-test on startup (problems-only notification)
@@ -1972,7 +2012,15 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
     if cfg.http_status_enabled:
         http_server = await asyncio.start_server(
             lambda r, w: _handle_http_client(
-                r, w, cfg=cfg, health=health, amx=amx, state=state, runtime=runtime, started_at=started_at
+                r,
+                w,
+                cfg=cfg,
+                health=health,
+                amx=amx,
+                state=state,
+                runtime=runtime,
+                problems=problems,
+                started_at=started_at,
             ),
             host=cfg.http_status_bind,
             port=cfg.http_status_port,
