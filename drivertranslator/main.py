@@ -10,6 +10,7 @@ import random
 import re
 import subprocess
 import time
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -800,6 +801,8 @@ async def _handle_http_client(
                     f"<tr><td><code>{rx_alias}</code></td><td><code>{tx_alias}</code></td><td class=\"{status_cls}\"><b>{status_txt}</b></td></tr>"
                 )
             route_html = "\n".join(route_rows)
+            _ct = cfg.http_status_control_token or ""
+            ctl_qs = ("&token=" + urllib.parse.quote_plus(_ct)) if _ct else ""
             body = f"""<!doctype html>
 <html>
 <head>
@@ -904,6 +907,13 @@ async def _handle_http_client(
     table {{ border-collapse: collapse; width: 100%; max-width: 720px; }}
     th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--row); }}
     .subtle {{ color: var(--muted); font-size: 12px; }}
+    .help-icon {{
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 1.1em; height: 1.1em; margin-left: 6px; font-size: 11px; font-weight: 700;
+      border: 1px solid var(--border); border-radius: 50%; color: var(--muted); cursor: help;
+      vertical-align: middle; line-height: 1;
+    }}
+    .ctrl-desc {{ color: var(--muted); font-size: 12px; font-weight: normal; margin-top: 4px; max-width: 420px; }}
   </style>
 </head>
 <body>
@@ -921,19 +931,61 @@ async def _handle_http_client(
   </div>
   <p class="subtle">JSON: <a href="/status.json"><code>/status.json</code></a> • Logs JSON: <a href="/logs.json"><code>/logs.json</code></a> • Controls JSON: <a href="/control.json"><code>/control.json</code></a></p>
   <h3>Controls</h3>
+  <p class="subtle">Runtime settings (no config file edit). Hover the <span class="help-icon" style="cursor:default">?</span> icons for details. Links may prompt your browser again for the page password.</p>
   <div class="card">
-    <div class="row"><div>AMX verify after switch</div><div><code>{str(rt['amx_verify_after_set']).lower()}</code> <a href="/control/set?key=amx_verify_after_set&value={'false' if rt['amx_verify_after_set'] else 'true'}">toggle</a></div></div>
     <div class="row">
-      <div>AMX verify timeout</div>
       <div>
-        <code>{rt['amx_verify_timeout_ms']}ms</code>
-        <input id="verifyTo" class="btn" style="width:96px; padding:6px 8px;" type="number" min="100" max="5000" step="50" value="{rt['amx_verify_timeout_ms']}"/>
-        <button id="applyVerifyTo" class="btn" type="button">Apply</button>
+        <b>AMX verify after switch</b>
+        <span class="help-icon" title="When ON, after each route the translator asks each affected decoder for STREAM via AMX. Mismatches send rti_notify only; RTI still gets an immediate matrix ack.">?</span>
+        <div class="ctrl-desc">Post-switch AMX STREAM check (errors go to rti_notify only).</div>
+      </div>
+      <div>
+        <code>{str(rt['amx_verify_after_set']).lower()}</code>
+        <a href="/control/set?key=amx_verify_after_set&value={'false' if rt['amx_verify_after_set'] else 'true'}{ctl_qs}"
+           title="Turn verify-after-switch on or off">toggle</a>
       </div>
     </div>
-    <div class="row"><div>RTI status heartbeat</div><div><code>{str(rt['rti_status_enabled']).lower()}</code> <a href="/control/set?key=rti_status_enabled&value={'false' if rt['rti_status_enabled'] else 'true'}">toggle</a></div></div>
-    <div class="row"><div>AMX self-test</div><div><a href="/control/selftest">run now</a></div></div>
-    <div class="row"><div>Reboot host</div><div><a href="/control/reboot">reboot now</a></div></div>
+    <div class="row">
+      <div>
+        <b>AMX verify timeout</b>
+        <span class="help-icon" title="How long to wait (ms) for each decoder status read during verify. Lower is snappier; raise if decoders are slow or the network is busy.">?</span>
+        <div class="ctrl-desc">Milliseconds to wait per decoder when verifying STREAM.</div>
+      </div>
+      <div>
+        <code>{rt['amx_verify_timeout_ms']}ms</code>
+        <input id="verifyTo" class="btn" style="width:96px; padding:6px 8px;" type="number" min="100" max="5000" step="50" value="{rt['amx_verify_timeout_ms']}"
+               title="New timeout in milliseconds"/>
+        <button id="applyVerifyTo" class="btn" type="button" title="Apply the timeout above">Apply</button>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <b>RTI status heartbeat</b>
+        <span class="help-icon" title="When ON, DriverTranslator sends periodic DTSTATUS lines to your rti_status UDP target (if enabled in config). Takes effect without restarting the service.">?</span>
+        <div class="ctrl-desc">Enable or pause periodic status UDP to RTI.</div>
+      </div>
+      <div>
+        <code>{str(rt['rti_status_enabled']).lower()}</code>
+        <a href="/control/set?key=rti_status_enabled&value={'false' if rt['rti_status_enabled'] else 'true'}{ctl_qs}"
+           title="Turn heartbeat on or off">toggle</a>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <b>AMX self-test</b>
+        <span class="help-icon" title="Tries a short TCP connect to every configured decoder IP (port 50002). Returns JSON: how many reachable. In dry-run mode all are reported reachable without connecting.">?</span>
+        <div class="ctrl-desc">Connectivity check to all decoders; shows JSON result.</div>
+      </div>
+      <div><a href="/control/selftest{('?' + ctl_qs[1:]) if ctl_qs else ''}" title="Run connectivity test now">run now</a></div>
+    </div>
+    <div class="row">
+      <div>
+        <b>Reboot host</b>
+        <span class="help-icon" title="Reboots this Linux machine (systemctl reboot). SSH and the webpage will drop until the system is back. Use for maintenance after updates.">?</span>
+        <div class="ctrl-desc">Full system reboot (not just the service).</div>
+      </div>
+      <div><a href="/control/reboot{('?' + ctl_qs[1:]) if ctl_qs else ''}" title="Reboot this server">reboot now</a></div>
+    </div>
   </div>
   <h3>Matrix (set by RTI)</h3>
   <p class="subtle">Shows the current emulated WyreStorm matrix state (RX → TX) based on the last commands received from RTI. <code>NULL</code> means “no source assigned”.</p>
@@ -975,7 +1027,7 @@ async def _handle_http_client(
         applyVerifyTo.addEventListener('click', () => {{
           const v = String(parseInt(verifyTo.value || '800', 10));
           // If control_token is configured, append &token=... manually in the address bar.
-          window.location.href = `/control/set?key=amx_verify_timeout_ms&value=${{encodeURIComponent(v)}}`;
+          window.location.href = `/control/set?key=amx_verify_timeout_ms&value=${{encodeURIComponent(v)}}{ctl_qs}`;
         }});
       }}
     }})();
