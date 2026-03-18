@@ -27,7 +27,7 @@ cd /opt/drivertranslator
 sudo bash ./linux/bin/install_drivertranslator.sh
 ```
 
-If you enable **tty1 auto-login + auto-start log view** in the installer, add your console user to `systemd-journal` so logs can be read **without sudo/password prompts** after boot:
+If you enable **tty1 auto-login + auto-start log view** in the installer and the console log view shows **permission denied** (or doesn’t show service logs), add your console user to `systemd-journal`:
 
 ```bash
 sudo usermod -aG systemd-journal <your_console_user>
