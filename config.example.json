@@ -69,6 +69,12 @@
     "port": 8080,
     "log_lines": 200,
     "control_token": null
+  },
+  "rti_control": {
+    "enabled": false,
+    "bind_address": null,
+    "port": 0,
+    "token": null
   }
 }
 

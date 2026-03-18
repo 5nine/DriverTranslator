@@ -8,6 +8,7 @@ import json
 import logging
 import random
 import re
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -164,6 +165,10 @@ class Config:
     http_status_port: int
     http_status_log_lines: int
     http_status_control_token: Optional[str]
+    rti_control_enabled: bool
+    rti_control_bind_address: Optional[str]
+    rti_control_port: int
+    rti_control_token: Optional[str]
 
 
 def load_config(path: str) -> Config:
@@ -217,6 +222,7 @@ def load_config(path: str) -> Config:
     rti_notify = raw.get("rti_notify", {})
     rti_status = raw.get("rti_status", {})
     http_status = raw.get("http_status", {})
+    rti_control = raw.get("rti_control", {})
 
     tx_by_alias = {t.alias: t for t in txs}
     tx_by_hostname = {t.hostname: t for t in txs}
@@ -274,6 +280,10 @@ def load_config(path: str) -> Config:
         http_status_port=_as_int(http_status.get("port"), default=8080),
         http_status_log_lines=_as_int(http_status.get("log_lines"), default=200),
         http_status_control_token=_opt_str(http_status.get("control_token")),
+        rti_control_enabled=_as_bool(rti_control.get("enabled"), default=False),
+        rti_control_bind_address=_bind_addr(rti_control.get("bind_address")),
+        rti_control_port=_as_int(rti_control.get("port"), default=0),
+        rti_control_token=_opt_str(rti_control.get("token")),
     )
 
 
@@ -562,6 +572,16 @@ def _http_response(status: str, content_type: str, body: bytes) -> bytes:
     return "\r\n".join(headers).encode("ascii") + body
 
 
+async def _do_reboot(*, reason: str) -> None:
+    LOG.error("REBOOT requested: %s", reason)
+    # Give HTTP/UDP handlers a moment to respond/log before rebooting.
+    await asyncio.sleep(1.0)
+    try:
+        subprocess.Popen(["/usr/bin/systemctl", "reboot"])
+    except FileNotFoundError:
+        subprocess.Popen(["systemctl", "reboot"])
+
+
 def _format_uptime(seconds: int) -> str:
     seconds = max(0, int(seconds))
     days, rem = divmod(seconds, 86400)
@@ -667,6 +687,7 @@ async def _handle_http_client(
         # Basic control endpoints (optional token).
         # /control/set?key=<k>&value=<v>[&token=<t>]
         # /control/selftest?[token=<t>]
+        # /control/reboot?[token=<t>]
         if path.startswith("/control/"):
             # very small query parsing (no urllib dependency)
             qs = ""
@@ -702,6 +723,12 @@ async def _handle_http_client(
                 res = await _amx_self_test(cfg=cfg, amx=amx)
                 body = (json.dumps(res, indent=2) + "\n").encode("utf-8")
                 writer.write(_http_response("200 OK", "application/json", body))
+                return
+
+            if path.startswith("/control/reboot"):
+                body = (json.dumps({"ok": True, "action": "rebooting"}, indent=2) + "\n").encode("utf-8")
+                writer.write(_http_response("200 OK", "application/json", body))
+                asyncio.create_task(_do_reboot(reason="http_control"))
                 return
 
             writer.write(_http_response("404 Not Found", "text/plain", b"not found"))
@@ -858,6 +885,7 @@ async def _handle_http_client(
     </div>
     <div class="row"><div>RTI status heartbeat</div><div><code>{str(rt['rti_status_enabled']).lower()}</code> <a href="/control/set?key=rti_status_enabled&value={'false' if rt['rti_status_enabled'] else 'true'}">toggle</a></div></div>
     <div class="row"><div>AMX self-test</div><div><a href="/control/selftest">run now</a></div></div>
+    <div class="row"><div>Reboot host</div><div><a href="/control/reboot">reboot now</a></div></div>
   </div>
   <h3>Matrix (set by RTI)</h3>
   <p class="subtle">Shows the current emulated WyreStorm matrix state (RX → TX) based on the last commands received from RTI. <code>NULL</code> means “no source assigned”.</p>
@@ -1464,6 +1492,42 @@ class RuntimeSettings:
                 raise KeyError(key)
 
 
+class _RtiControlUdp(asyncio.DatagramProtocol):
+    def __init__(self, *, cfg: Config):
+        self._cfg = cfg
+        self._last_reboot_at = 0.0
+
+    def datagram_received(self, data: bytes, addr) -> None:  # type: ignore[override]
+        if not self._cfg.rti_control_enabled:
+            return
+        text = data.decode("utf-8", errors="replace").strip()
+        # Supported:
+        # - "reboot <token>"
+        # - "DT reboot <token>"
+        parts = text.split()
+        if not parts:
+            return
+        cmd = parts[0].lower()
+        if cmd == "dt" and len(parts) >= 2:
+            cmd = parts[1].lower()
+            parts = parts[1:]
+        if cmd != "reboot":
+            return
+
+        token = parts[1] if len(parts) >= 2 else ""
+        if not self._cfg.rti_control_token or token != self._cfg.rti_control_token:
+            LOG.warning("RTI control reboot denied from %s (bad token)", addr)
+            return
+
+        now = time.monotonic()
+        if (now - self._last_reboot_at) < 60:
+            LOG.warning("RTI control reboot suppressed (cooldown)")
+            return
+        self._last_reboot_at = now
+        LOG.error("RTI control requested reboot from %s", addr)
+        asyncio.create_task(_do_reboot(reason=f"rti_udp:{addr}"))
+
+
 def _lookup_tx(cfg: Config, token: str) -> Optional[Tx]:
     return cfg.tx_by_alias.get(token) or cfg.tx_by_hostname.get(token)
 
@@ -1969,6 +2033,12 @@ async def handle_client(
 
 async def run_server(*, cfg: Config, listen: str, port: int) -> None:
     started_at = time.monotonic()
+    # Optional RTI UDP control listener (e.g., reboot command)
+    if cfg.rti_control_enabled and cfg.rti_control_port > 0 and cfg.rti_control_token:
+        loop = asyncio.get_running_loop()
+        local = (cfg.rti_control_bind_address, cfg.rti_control_port) if cfg.rti_control_bind_address else ("0.0.0.0", cfg.rti_control_port)
+        await loop.create_datagram_endpoint(lambda: _RtiControlUdp(cfg=cfg), local_addr=local)
+        LOG.warning("RTI control UDP listening on %s:%d", local[0], local[1])
     if cfg.amx_bind_address:
         LOG.info("AMX outbound connections will bind to %s (AVoIP NIC)", cfg.amx_bind_address)
 
