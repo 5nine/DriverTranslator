@@ -116,14 +116,8 @@
   </div>
 
   <p class="subtle">
-    JSON: <a href="#"><code>/status.json</code></a> • Logs JSON: <a href="#"><code>/logs.json</code></a> • Controls JSON: <a href="#"><code>/control.json</code></a> • Problems JSON: <a href="#"><code>/problems.json</code></a>
+    JSON: <a href="#"><code>/status.json</code></a> • Logs JSON: <a href="#"><code>/logs.json</code></a> • Controls JSON: <a href="#"><code>/control.json</code></a>
   </p>
-
-  <h3>Problems</h3>
-  <div class="card">
-    <div class="row"><div>Recent problems</div><div><code>1</code></div></div>
-    <pre>DT: ERROR AMX route failed on: OUT14-TV14 (192.168.10.114): (dry-run) Simulated offline decoder: 192.168.10.114:50002</pre>
-  </div>
 
   <h3>Controls</h3>
   <div class="card">
@@ -143,18 +137,19 @@
   <h3>Matrix (set by RTI)</h3>
   <p class="subtle">This table reflects the last routing commands received from RTI (emulated WyreStorm matrix state).</p>
   <table style="border-collapse: collapse; width: 100%; max-width: 720px;">
-    <thead><tr><th style="text-align:left; padding:8px 10px;">RX (Output)</th><th style="text-align:left; padding:8px 10px;">TX (Input)</th></tr></thead>
+    <thead><tr><th style="text-align:left; padding:8px 10px;">RX (Output)</th><th style="text-align:left; padding:8px 10px;">TX (Input)</th><th style="text-align:left; padding:8px 10px;">Status</th></tr></thead>
     <tbody>
-      <tr><td style="padding:8px 10px;"><code>OUT1-TV1</code></td><td style="padding:8px 10px;"><code>IN3-BOX3</code></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT2-TV2</code></td><td style="padding:8px 10px;"><code>IN5-BOX5</code></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT3-TV3</code></td><td style="padding:8px 10px;"><code>IN5-BOX5</code></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT4-TV4</code></td><td style="padding:8px 10px;"><code>IN1-BOX1</code></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT5-TV5</code></td><td style="padding:8px 10px;"><code>IN1-BOX1</code></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT6-TV6</code></td><td style="padding:8px 10px;"><code>IN2-BOX2</code></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT7-TV7</code></td><td style="padding:8px 10px;"><code>IN2-BOX2</code></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT8-TV8</code></td><td style="padding:8px 10px;"><code>IN10-BOX10</code></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT9-TV9</code></td><td style="padding:8px 10px;"><code>NULL</code></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT10-TV10</code></td><td style="padding:8px 10px;"><code>IN4-BOX4</code></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT1-TV1</code></td><td style="padding:8px 10px;"><code>IN3-BOX3</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT2-TV2</code></td><td style="padding:8px 10px;"><code>IN5-BOX5</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT3-TV3</code></td><td style="padding:8px 10px;"><code>IN5-BOX5</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT4-TV4</code></td><td style="padding:8px 10px;"><code>IN1-BOX1</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT5-TV5</code></td><td style="padding:8px 10px;"><code>IN1-BOX1</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT6-TV6</code></td><td style="padding:8px 10px;"><code>IN2-BOX2</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT7-TV7</code></td><td style="padding:8px 10px;"><code>IN2-BOX2</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT8-TV8</code></td><td style="padding:8px 10px;"><code>IN10-BOX10</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT9-TV9</code></td><td style="padding:8px 10px;"><code>NULL</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT10-TV10</code></td><td style="padding:8px 10px;"><code>IN4-BOX4</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT14-TV14</code></td><td style="padding:8px 10px;"><code>IN4-BOX4</code></td><td style="padding:8px 10px; color:#cc2f2f;"><b>OFFLINE</b></td></tr>
     </tbody>
   </table>
 

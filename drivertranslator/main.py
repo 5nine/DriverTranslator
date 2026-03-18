@@ -640,7 +640,7 @@ async def _handle_http_client(
 
         snapshot = _build_status_snapshot(cfg=cfg, health=health, amx=amx, started_at=started_at)
         rt = await runtime.snapshot()
-        prob = await problems.snapshot()
+        _ = await problems.snapshot()
 
         if path in ("/status", "/status.json"):
             body = (json.dumps(snapshot, indent=2) + "\n").encode("utf-8")
@@ -718,8 +718,11 @@ async def _handle_http_client(
             route_rows = []
             for rx_alias in sorted(cfg.rx_by_alias.keys(), key=_rx_alias_sort_key):
                 tx_alias = state.video.get(rx_alias) or "NULL"
+                online = state.rx_online.get(rx_alias, True)
+                status_txt = "ONLINE" if online else "OFFLINE"
+                status_cls = "ok" if online else "bad"
                 route_rows.append(
-                    f"<tr><td><code>{rx_alias}</code></td><td><code>{tx_alias}</code></td></tr>"
+                    f"<tr><td><code>{rx_alias}</code></td><td><code>{tx_alias}</code></td><td class=\"{status_cls}\"><b>{status_txt}</b></td></tr>"
                 )
             route_html = "\n".join(route_rows)
             body = f"""<!doctype html>
@@ -820,6 +823,8 @@ async def _handle_http_client(
     .row {{ display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--row); }}
     .row:last-child {{ border-bottom: 0; }}
     code {{ background: var(--code-bg); color: var(--code-fg); padding: 2px 6px; border-radius: 6px; }}
+    .ok {{ color: #118a2a; }}
+    .bad {{ color: #cc2f2f; }}
     pre {{ white-space: pre-wrap; background: var(--log-bg); color: var(--log-fg); padding: 12px; border-radius: 10px; overflow-x: auto; }}
     table {{ border-collapse: collapse; width: 100%; max-width: 720px; }}
     th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--row); }}
@@ -839,12 +844,7 @@ async def _handle_http_client(
     <div class="row"><div>Configured RX</div><div><code>{snapshot['rx_configured']}</code></div></div>
     <div class="row"><div>AMX connections (persistent)</div><div><code>{amx_conn}</code></div></div>
   </div>
-  <p class="subtle">JSON: <a href="/status.json"><code>/status.json</code></a> • Logs JSON: <a href="/logs.json"><code>/logs.json</code></a> • Controls JSON: <a href="/control.json"><code>/control.json</code></a> • Problems JSON: <a href="/problems.json"><code>/problems.json</code></a></p>
-  <h3>Problems</h3>
-  <div class="card">
-    <div class="row"><div>Recent problems</div><div><code>{len(prob)}</code></div></div>
-    <pre>{'\\n'.join(p.get('message','') for p in prob[-10:]) if prob else 'none'}</pre>
-  </div>
+  <p class="subtle">JSON: <a href="/status.json"><code>/status.json</code></a> • Logs JSON: <a href="/logs.json"><code>/logs.json</code></a> • Controls JSON: <a href="/control.json"><code>/control.json</code></a></p>
   <h3>Controls</h3>
   <div class="card">
     <div class="row"><div>AMX verify after switch</div><div><code>{str(rt['amx_verify_after_set']).lower()}</code> <a href="/control/set?key=amx_verify_after_set&value={'false' if rt['amx_verify_after_set'] else 'true'}">toggle</a></div></div>
@@ -862,7 +862,7 @@ async def _handle_http_client(
   <h3>Matrix (set by RTI)</h3>
   <p class="subtle">Shows the current emulated WyreStorm matrix state (RX → TX) based on the last commands received from RTI. <code>NULL</code> means “no source assigned”.</p>
   <table>
-    <thead><tr><th>RX (Output)</th><th>TX (Input)</th></tr></thead>
+    <thead><tr><th>RX (Output)</th><th>TX (Input)</th><th>Status</th></tr></thead>
     <tbody>
       {route_html}
     </tbody>
@@ -1369,6 +1369,12 @@ class NhdState:
         self.usb: Dict[str, Optional[str]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
         self.serial: Dict[str, Optional[str]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
         self.infrared: Dict[str, Optional[str]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
+        # Best-effort health status (updated on AMX send success/failure).
+        self.rx_online: Dict[str, bool] = {rx.alias: True for rx in cfg.rx_by_alias.values()}
+
+    def set_rx_online(self, rx_alias: str, online: bool) -> None:
+        if rx_alias in self.rx_online:
+            self.rx_online[rx_alias] = bool(online)
 
     def set_all_media(self, *, tx_alias: Optional[str], rx_aliases: List[str]) -> None:
         for rx in rx_aliases:
@@ -1540,7 +1546,7 @@ def _handle_config_get(cfg: Config, session: NhdCtlSession, cmd: str) -> List[st
     return ["unknown command"]
 
 
-async def _handle_matrix_set(cfg: Config, amx: Any, cmd: str) -> Tuple[bool, str, List[str]]:
+async def _handle_matrix_set(cfg: Config, amx: Any, cmd: str) -> Tuple[bool, str, List[Tuple[str, str, str]]]:
     # cmd: "matrix set <TX> <RX1> <RX2> ... <RXn>"
     parts = cmd.split()
     if len(parts) < 4:
@@ -1566,7 +1572,7 @@ async def _handle_matrix_set(cfg: Config, amx: Any, cmd: str) -> Tuple[bool, str
             return False, "unknown command", []
         rxs.append(rx)
 
-    failures: List[str] = []
+    failures: List[Tuple[str, str, str]] = []
     if tx is not None:
         # Fire AMX commands (one per decoder). Do it concurrently.
         results = await asyncio.gather(
@@ -1575,7 +1581,7 @@ async def _handle_matrix_set(cfg: Config, amx: Any, cmd: str) -> Tuple[bool, str
         )
         for rx, res in zip(rxs, results):
             if isinstance(res, BaseException):
-                failures.append(f"{rx.alias} ({rx.amx_decoder_ip}): {res}")
+                failures.append((rx.alias, rx.amx_decoder_ip, str(res)))
     else:
         LOG.info("AMX routing skipped: NULL assignment requested")
 
@@ -1685,7 +1691,7 @@ async def handle_client(
             if lower.startswith("matrix set "):
                 ok = False
                 resp = "unknown command"
-                failures: List[str] = []
+                failures: List[Tuple[str, str, str]] = []
                 try:
                     ok, resp, failures = await _handle_matrix_set(cfg, amx, line)
                     if ok:
@@ -1729,7 +1735,25 @@ async def handle_client(
                     ok, resp = True, line
 
                 if failures:
-                    await notifier.problem("amx.route.partial", f"DT: ERROR AMX route failed on: {', '.join(failures[:3])}" + (" ..." if len(failures) > 3 else ""))
+                    for (rx_a, ip, err) in failures:
+                        state.set_rx_online(rx_a, False)
+                        await notifier.problem(f"amx.set.{ip}", f"DT: ERROR AMX route failed: {rx_a} ({ip}): {err}")
+                    await notifier.problem(
+                        "amx.route.partial",
+                        "DT: ERROR AMX route failed on: "
+                        + ", ".join(f"{rx_a}({ip})" for (rx_a, ip, _e) in failures[:3])
+                        + (" ..." if len(failures) > 3 else ""),
+                    )
+                else:
+                    # Mark RX as online on successful send
+                    try:
+                        parts = line.split()
+                        for tok in parts[3:]:
+                            rx_obj = _lookup_rx(cfg, tok)
+                            if rx_obj is not None:
+                                state.set_rx_online(rx_obj.alias, True)
+                    except Exception:
+                        pass
 
                 writer.write(_crlf(resp if ok else "unknown command"))
                 await writer.drain()
@@ -1779,14 +1803,23 @@ async def handle_client(
                                     ),
                                     return_exceptions=True,
                                 )
-                                failures: List[str] = []
+                                failures: List[Tuple[str, str, str]] = []
                                 for a, res in zip(rx_aliases, results):
                                     if isinstance(res, BaseException):
-                                        failures.append(f"{a} ({cfg.rx_by_alias[a].amx_decoder_ip}): {res}")
+                                        failures.append((a, cfg.rx_by_alias[a].amx_decoder_ip, str(res)))
+                                        state.set_rx_online(a, False)
+                                    else:
+                                        state.set_rx_online(a, True)
                                 if failures:
+                                    for (rx_a, ip, err) in failures:
+                                        await notifier.problem(
+                                            f"amx.set.{ip}",
+                                            f"DT: ERROR AMX breakaway video route failed: {rx_a} ({ip}): {err}",
+                                        )
                                     await notifier.problem(
                                         "amx.breakaway.video.partial",
-                                        f"DT: ERROR AMX breakaway video route failed on: {', '.join(failures[:3])}"
+                                        "DT: ERROR AMX breakaway video route failed on: "
+                                        + ", ".join(f"{rx_a}({ip})" for (rx_a, ip, _e) in failures[:3])
                                         + (" ..." if len(failures) > 3 else ""),
                                     )
 
