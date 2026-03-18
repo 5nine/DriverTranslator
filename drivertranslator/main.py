@@ -7,6 +7,7 @@ import collections
 import json
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -277,6 +278,22 @@ def _retry_delay_seconds(*, attempt_index: int, initial_ms: int, max_ms: int) ->
     base_ms = min(max_ms, int(initial_ms * (2 ** max(0, attempt_index - 1))))
     jitter_ms = int(base_ms * random.uniform(0.0, 0.2))
     return (base_ms + jitter_ms) / 1000.0
+
+
+_RX_ALIAS_RE = re.compile(r"^OUT(\d+)\b", re.IGNORECASE)
+
+
+def _rx_alias_sort_key(alias: str) -> Tuple[int, str]:
+    """
+    Natural sort for RX aliases like OUT1-TV1, OUT10-TV10, ...
+    """
+    m = _RX_ALIAS_RE.match(alias.strip())
+    if not m:
+        return (10**9, alias)
+    try:
+        return (int(m.group(1)), alias)
+    except Exception:
+        return (10**9, alias)
 
 
 def _validate_config(cfg: Config) -> None:
@@ -670,7 +687,7 @@ async def _handle_http_client(
             )
             log_lines = "\n".join(_get_log_tail(rt["http_log_lines"]))
             route_rows = []
-            for rx_alias in sorted(cfg.rx_by_alias.keys()):
+            for rx_alias in sorted(cfg.rx_by_alias.keys(), key=_rx_alias_sort_key):
                 tx_alias = state.video.get(rx_alias) or "NULL"
                 route_rows.append(
                     f"<tr><td><code>{rx_alias}</code></td><td><code>{tx_alias}</code></td></tr>"
