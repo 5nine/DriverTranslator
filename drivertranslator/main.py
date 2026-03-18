@@ -9,6 +9,7 @@ import json
 import logging
 import random
 import re
+import secrets
 import subprocess
 import time
 import urllib.parse
@@ -20,6 +21,46 @@ from typing import Any, Dict, List, Optional, Tuple
 LOG = logging.getLogger("drivertranslator")
 
 _LOG_RING: "collections.deque[str]" = collections.deque(maxlen=500)
+
+# Short-lived tokens so the status page can call /control/* via fetch() (browsers do not send Basic Auth on fetch).
+_HTTP_UI_SESS_TTL_SEC = 30 * 60
+_HTTP_UI_SESS: Dict[str, float] = {}
+
+
+def _http_parse_path_params(path: str) -> Tuple[str, Dict[str, str]]:
+    if "?" not in path:
+        return path, {}
+    base, qs = path.split("?", 1)
+    params: Dict[str, str] = {}
+    for part in qs.split("&"):
+        if not part or "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        params[k] = urllib.parse.unquote_plus(v)
+    return base, params
+
+
+def _http_ui_sess_issue() -> str:
+    now = time.time()
+    for k, ts in list(_HTTP_UI_SESS.items()):
+        if now - ts > _HTTP_UI_SESS_TTL_SEC:
+            del _HTTP_UI_SESS[k]
+    tok = secrets.token_urlsafe(24)
+    _HTTP_UI_SESS[tok] = now
+    return tok
+
+
+def _http_ui_sess_valid(tok: str) -> bool:
+    if not tok:
+        return False
+    ts = _HTTP_UI_SESS.get(tok)
+    if ts is None:
+        return False
+    if time.time() - ts > _HTTP_UI_SESS_TTL_SEC:
+        with contextlib.suppress(KeyError):
+            del _HTTP_UI_SESS[tok]
+        return False
+    return True
 
 
 class _RingBufferLogHandler(logging.Handler):
@@ -767,19 +808,24 @@ async def _handle_http_client(
         if not data:
             return
 
-        # Require Basic auth for the entire webpage (and JSON endpoints).
-        if cfg.http_status_password:
-            pw = _parse_basic_auth_password(data)
-            if pw != cfg.http_status_password:
-                writer.write(_http_unauthorized())
-                return
-
         line = data.split(b"\r\n", 1)[0].decode("ascii", errors="replace")
         parts = line.split()
         if len(parts) < 2:
             writer.write(_http_response("400 Bad Request", "text/plain", b"bad request"))
             return
         method, path = parts[0], parts[1]
+        path_only, early_params = _http_parse_path_params(path)
+        control_via_ui = path_only.startswith("/control/") and _http_ui_sess_valid(
+            early_params.get("ui_sess", "")
+        )
+
+        # Require Basic auth (except /control/* with valid ui_sess from this session's status page).
+        if cfg.http_status_password:
+            pw = _parse_basic_auth_password(data)
+            if pw != cfg.http_status_password and not control_via_ui:
+                writer.write(_http_unauthorized())
+                return
+
         if method != "GET":
             writer.write(_http_response("405 Method Not Allowed", "text/plain", b"method not allowed"))
             return
@@ -806,6 +852,7 @@ async def _handle_http_client(
             return
 
         if path in ("/problems", "/problems.json"):
+            prob = await problems.snapshot()
             body = (json.dumps({"problems": prob}, indent=2) + "\n").encode("utf-8")
             writer.write(_http_response("200 OK", "application/json", body))
             return
@@ -997,7 +1044,10 @@ async def _handle_http_client(
             route_html = "\n".join(route_rows)
             _ct = cfg.http_status_control_token or ""
             ctl_qs = ("&token=" + urllib.parse.quote_plus(_ct)) if _ct else ""
-            ctl_selftest_reboot = ("?" + ctl_qs[1:] + "&html=1") if ctl_qs else "?html=1"
+            _ui_sess = _http_ui_sess_issue()
+            _ui_sess_js = json.dumps(_ui_sess)
+            _ctl_qs_js = json.dumps(ctl_qs)
+            _amx_port = int(cfg.amx_decoder_port)
             body = f"""<!doctype html>
 <html>
 <head>
@@ -1243,16 +1293,41 @@ async def _handle_http_client(
     .help-icon:hover {{ color: var(--accent); border-color: var(--accent); }}
 
     .ctrl-actions {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
-    .ctrl-actions a {{
-      display: inline-block;
-      padding: 6px 12px;
+    .ctrl-actions .ctrl-run {{
+      padding: 6px 14px;
       border-radius: 8px;
       background: var(--accent-soft);
       color: var(--link);
       font-weight: 600;
       font-size: 13px;
+      border: 1px solid var(--border);
+      cursor: pointer;
     }}
-    .ctrl-actions a:hover {{ text-decoration: none; filter: brightness(0.95); }}
+    .ctrl-actions .ctrl-run:hover {{ filter: brightness(0.97); }}
+    .ctrl-actions .ctrl-run:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+
+    .dt-modal[hidden] {{ display: none !important; }}
+    .dt-modal:not([hidden]) {{
+      position: fixed; inset: 0; z-index: 3000;
+      display: flex; align-items: center; justify-content: center;
+      padding: 20px;
+    }}
+    .dt-modal-backdrop {{
+      position: absolute; inset: 0; background: rgba(15, 23, 42, 0.5);
+      backdrop-filter: blur(2px);
+    }}
+    .dt-modal-card {{
+      position: relative; max-width: 420px; width: 100%;
+      padding: 26px 24px 22px; border-radius: 16px;
+      background: var(--card); border: 1px solid var(--border);
+      box-shadow: 0 20px 50px rgba(0,0,0,0.2);
+    }}
+    .dt-modal-card h2 {{ margin: 0 0 12px 0; font-size: 1.2rem; letter-spacing: -0.02em; }}
+    .dt-modal-card p {{ margin: 0 0 20px 0; color: var(--muted); font-size: 14px; line-height: 1.55; }}
+    .dt-modal-card.dt-ok h2 {{ color: #15803d; }}
+    .dt-modal-card.dt-bad h2 {{ color: #b91c1c; }}
+    [data-theme="dark"] .dt-modal-card.dt-ok h2 {{ color: #4ade80; }}
+    [data-theme="dark"] .dt-modal-card.dt-bad h2 {{ color: #f87171; }}
   </style>
 </head>
 <body>
@@ -1282,37 +1357,37 @@ async def _handle_http_client(
   </div>
 
   <div class="section-title">Controls</div>
-  <p class="subtle">Runtime only (no config file). Hover <span class="help-icon" style="cursor:default" title="Each control has a ? with full help.">?</span> next to a label for help. Control links may ask for the page password again.</p>
+  <p class="subtle">Runtime only (no config file). Hover <span class="help-icon" style="cursor:default" title="Each control has a ? with full help.">?</span> for details. Results open in a short on-page message.</p>
   <div class="card">
     <div class="row">
       <div><b>AMX verify after switch</b><span class="help-icon" title="When ON, after each route the translator asks each affected decoder for STREAM via AMX. Mismatches send rti_notify only; RTI still gets an immediate matrix ack.">?</span></div>
       <div class="ctrl-actions">
-        <code>{str(rt['amx_verify_after_set']).lower()}</code>
-        <a href="/control/set?key=amx_verify_after_set&value={'false' if rt['amx_verify_after_set'] else 'true'}{ctl_qs}&html=1">Toggle</a>
+        <code id="st_amx_verify">{str(rt['amx_verify_after_set']).lower()}</code>
+        <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="amx_verify_after_set" data-value="{'false' if rt['amx_verify_after_set'] else 'true'}">Toggle</button>
       </div>
     </div>
     <div class="row">
       <div><b>AMX verify timeout</b><span class="help-icon" title="How long to wait (ms) for each decoder status read during verify. Lower is snappier; raise if decoders are slow or the network is busy.">?</span></div>
       <div class="ctrl-actions">
-        <code>{rt['amx_verify_timeout_ms']} ms</code>
+        <code id="st_verify_ms">{rt['amx_verify_timeout_ms']} ms</code>
         <input id="verifyTo" class="btn" style="width:88px; padding:6px 8px;" type="number" min="100" max="5000" step="50" value="{rt['amx_verify_timeout_ms']}"/>
-        <button id="applyVerifyTo" class="btn btn-primary" type="button">Apply</button>
+        <button id="applyVerifyTo" class="btn btn-primary ctrl-run" type="button" data-dt-ctl="verify_ms">Apply</button>
       </div>
     </div>
     <div class="row">
       <div><b>RTI status heartbeat</b><span class="help-icon" title="When ON, DriverTranslator sends periodic DTSTATUS lines to your rti_status UDP target (if enabled in config). No service restart needed.">?</span></div>
       <div class="ctrl-actions">
-        <code>{str(rt['rti_status_enabled']).lower()}</code>
-        <a href="/control/set?key=rti_status_enabled&value={'false' if rt['rti_status_enabled'] else 'true'}{ctl_qs}&html=1">Toggle</a>
+        <code id="st_rti_status">{str(rt['rti_status_enabled']).lower()}</code>
+        <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="rti_status_enabled" data-value="{'false' if rt['rti_status_enabled'] else 'true'}">Toggle</button>
       </div>
     </div>
     <div class="row">
-      <div><b>AMX self-test</b><span class="help-icon" title="Short TCP connect to every configured decoder IP (port 50002). Returns JSON with reachability. In dry-run mode all decoders count as reachable without connecting.">?</span></div>
-      <div class="ctrl-actions"><a href="/control/selftest{ctl_selftest_reboot}">Run now</a></div>
+      <div><b>AMX self-test</b><span class="help-icon" title="Short TCP connect to every configured decoder IP. In dry-run mode all decoders count as reachable without connecting.">?</span></div>
+      <div class="ctrl-actions"><button type="button" class="ctrl-run" data-dt-ctl="selftest">Run now</button></div>
     </div>
     <div class="row">
       <div><b>Reboot host</b><span class="help-icon" title="Reboots this Linux machine (systemctl reboot). SSH and this page drop until the system is back.">?</span></div>
-      <div class="ctrl-actions"><a href="/control/reboot{ctl_selftest_reboot}">Reboot</a></div>
+      <div class="ctrl-actions"><button type="button" class="ctrl-run" data-dt-ctl="reboot">Reboot</button></div>
     </div>
   </div>
 
@@ -1329,40 +1404,207 @@ async def _handle_http_client(
 
   <div class="section-title">Recent logs</div>
   <pre>{log_lines}</pre>
+
+  <div id="dtModal" class="dt-modal" hidden>
+    <div class="dt-modal-backdrop" id="dtModalBackdrop"></div>
+    <div class="dt-modal-card" id="dtModalCard" role="dialog" aria-modal="true" aria-labelledby="dtModalTitle">
+      <h2 id="dtModalTitle"></h2>
+      <p id="dtModalText"></p>
+      <button type="button" class="btn btn-primary" id="dtModalOk">OK</button>
+    </div>
+  </div>
   </div>
   <script>
     (function () {{
-      const btn = document.getElementById('themeBtn');
-      const root = document.documentElement;
-      const key = 'dt_theme';
+      const DT_UI = {{ sess: {_ui_sess_js}, ctl: {_ctl_qs_js}, port: {_amx_port} }};
+      function ctlUrl(path) {{
+        const sep = path.indexOf('?') >= 0 ? '&' : '?';
+        let u = path + sep + 'ui_sess=' + encodeURIComponent(DT_UI.sess);
+        if (DT_UI.ctl) u += DT_UI.ctl;
+        return u;
+      }}
 
-      function apply(theme) {{
-        if (!theme) {{
-          root.removeAttribute('data-theme');
+      const modal = document.getElementById('dtModal');
+      const modalCard = document.getElementById('dtModalCard');
+      const modalTitle = document.getElementById('dtModalTitle');
+      const modalText = document.getElementById('dtModalText');
+      const modalOk = document.getElementById('dtModalOk');
+      const modalBackdrop = document.getElementById('dtModalBackdrop');
+
+      function showModal(ok, title, text) {{
+        modalCard.classList.remove('dt-ok', 'dt-bad');
+        modalCard.classList.add(ok ? 'dt-ok' : 'dt-bad');
+        modalTitle.textContent = title;
+        modalText.textContent = text;
+        modal.removeAttribute('hidden');
+      }}
+      function hideModal() {{ modal.setAttribute('hidden', ''); }}
+      modalOk.addEventListener('click', hideModal);
+      modalBackdrop.addEventListener('click', hideModal);
+      document.addEventListener('keydown', (e) => {{ if (e.key === 'Escape') hideModal(); }});
+
+      const ctrlBtns = document.querySelectorAll('.ctrl-run');
+      function setBusy(on) {{
+        ctrlBtns.forEach((b) => {{ b.disabled = !!on; }});
+      }}
+
+      function setSavedMessage(key, j) {{
+        if (key === 'amx_verify_timeout_ms')
+          return 'Verify timeout is now ' + j.amx_verify_timeout_ms + ' ms. Applies immediately; no restart.';
+        if (key === 'amx_verify_after_set')
+          return 'AMX verify after switch is now ' + String(j.amx_verify_after_set).toLowerCase() + '. Applies immediately.';
+        if (key === 'rti_status_enabled')
+          return 'RTI status heartbeat is now ' + String(j.rti_status_enabled).toLowerCase() + '. Applies immediately.';
+        return 'Setting updated. Applies immediately.';
+      }}
+
+      async function handleControlResponse(r, okTitle, getDetail) {{
+        if (r.status === 401) {{
+          showModal(false, 'Session expired', 'Refresh this page and sign in again, then retry.');
           return;
         }}
-        root.setAttribute('data-theme', theme);
+        if (r.status === 403) {{
+          showModal(false, 'Not allowed', 'Wrong or missing control token in config. Check http_status.control_token.');
+          return;
+        }}
+        const t = await r.text();
+        let j = null;
+        try {{ j = JSON.parse(t); }} catch (e) {{}}
+        if (!r.ok) {{
+          showModal(false, 'Failed', (j && j.error) ? j.error : (t.slice(0, 200) || r.status + ' ' + r.statusText));
+          return;
+        }}
+        showModal(true, okTitle, getDetail(j, t));
       }}
 
-      const saved = localStorage.getItem(key);
-      if (saved === 'light' || saved === 'dark') apply(saved);
-
-      btn.addEventListener('click', () => {{
-        const current = root.getAttribute('data-theme');
-        const next = current === 'dark' ? 'light' : 'dark';
-        apply(next);
-        localStorage.setItem(key, next);
+      document.querySelectorAll('[data-dt-ctl="set"]').forEach((btn) => {{
+        btn.addEventListener('click', async () => {{
+          const key = btn.getAttribute('data-key');
+          const value = btn.getAttribute('data-value');
+          setBusy(true);
+          try {{
+            const url = ctlUrl('/control/set?key=' + encodeURIComponent(key) + '&value=' + encodeURIComponent(value));
+            const r = await fetch(url);
+            await handleControlResponse(r, 'Saved', (j) => {{
+              if (!j) return 'Done.';
+              const msg = setSavedMessage(key, j);
+              if (key === 'amx_verify_after_set') {{
+                const el = document.getElementById('st_amx_verify');
+                if (el) el.textContent = String(j.amx_verify_after_set).toLowerCase();
+                btn.setAttribute('data-value', j.amx_verify_after_set ? 'false' : 'true');
+              }}
+              if (key === 'rti_status_enabled') {{
+                const el = document.getElementById('st_rti_status');
+                if (el) el.textContent = String(j.rti_status_enabled).toLowerCase();
+                btn.setAttribute('data-value', j.rti_status_enabled ? 'false' : 'true');
+              }}
+              return msg;
+            }});
+          }} catch (e) {{
+            showModal(false, 'Network error', String(e.message || e));
+          }} finally {{
+            setBusy(false);
+          }}
+        }});
       }});
 
-      const verifyTo = document.getElementById('verifyTo');
       const applyVerifyTo = document.getElementById('applyVerifyTo');
-      if (verifyTo && applyVerifyTo) {{
-        applyVerifyTo.addEventListener('click', () => {{
-          const v = String(parseInt(verifyTo.value || '800', 10));
-          // If control_token is configured, append &token=... manually in the address bar.
-          window.location.href = `/control/set?key=amx_verify_timeout_ms&value=${{encodeURIComponent(v)}}{ctl_qs}&html=1`;
+      const verifyTo = document.getElementById('verifyTo');
+      if (applyVerifyTo && verifyTo) {{
+        applyVerifyTo.addEventListener('click', async () => {{
+          const v = String(Math.max(100, Math.min(5000, parseInt(verifyTo.value || '800', 10) || 800)));
+          verifyTo.value = v;
+          setBusy(true);
+          try {{
+            const r = await fetch(ctlUrl('/control/set?key=amx_verify_timeout_ms&value=' + encodeURIComponent(v)));
+            await handleControlResponse(r, 'Saved', (j) => {{
+              if (j && j.amx_verify_timeout_ms != null) {{
+                const el = document.getElementById('st_verify_ms');
+                if (el) el.textContent = j.amx_verify_timeout_ms + ' ms';
+              }}
+              return setSavedMessage('amx_verify_timeout_ms', j || {{}});
+            }});
+          }} catch (e) {{
+            showModal(false, 'Network error', String(e.message || e));
+          }} finally {{
+            setBusy(false);
+          }}
         }});
       }}
+
+      document.querySelectorAll('[data-dt-ctl="selftest"]').forEach((btn) => {{
+        btn.addEventListener('click', async () => {{
+          setBusy(true);
+          try {{
+            const r = await fetch(ctlUrl('/control/selftest'));
+            if (r.status === 401) {{
+              showModal(false, 'Session expired', 'Refresh this page and sign in again, then retry.');
+              return;
+            }}
+            if (r.status === 403) {{
+              showModal(false, 'Not allowed', 'Wrong or missing control token in config.');
+              return;
+            }}
+            const t = await r.text();
+            let j = null;
+            try {{ j = JSON.parse(t); }} catch (e) {{}}
+            if (!r.ok) {{
+              showModal(false, 'Self-test failed', (t || r.statusText).slice(0, 300));
+              return;
+            }}
+            const total = (j && j.total) | 0, okn = (j && j.ok) | 0;
+            const allOk = !total || okn === total;
+            let detail = 'Done.';
+            if (j) {{
+              if (!total) detail = 'No decoders are configured.';
+              else {{
+                const unr = j.unreachable || [];
+                if (unr.length)
+                  detail = okn + ' of ' + total + ' decoders reachable on port ' + DT_UI.port + '. Unreachable: ' + unr.join(', ') + '.';
+                else
+                  detail = 'All ' + total + ' decoders accepted a TCP connection on port ' + DT_UI.port + '.';
+              }}
+            }}
+            showModal(allOk, allOk ? 'Self-test passed' : 'Self-test: issues found', detail);
+          }} catch (e) {{
+            showModal(false, 'Network error', String(e.message || e));
+          }} finally {{
+            setBusy(false);
+          }}
+        }});
+      }});
+
+      document.querySelectorAll('[data-dt-ctl="reboot"]').forEach((btn) => {{
+        btn.addEventListener('click', async () => {{
+          if (!confirm('Reboot this machine? SSH and this page will disconnect until it is back.')) return;
+          setBusy(true);
+          try {{
+            const r = await fetch(ctlUrl('/control/reboot'));
+            await handleControlResponse(r, 'Reboot scheduled', () =>
+              'The system will restart shortly. Reopen this page after boot if needed.');
+          }} catch (e) {{
+            showModal(false, 'Network error', String(e.message || e));
+          }} finally {{
+            setBusy(false);
+          }}
+        }});
+      }});
+
+      const themeBtn = document.getElementById('themeBtn');
+      const root = document.documentElement;
+      const themeKey = 'dt_theme';
+      function applyTheme(theme) {{
+        if (!theme) {{ root.removeAttribute('data-theme'); return; }}
+        root.setAttribute('data-theme', theme);
+      }}
+      const savedTheme = localStorage.getItem(themeKey);
+      if (savedTheme === 'light' || savedTheme === 'dark') applyTheme(savedTheme);
+      themeBtn.addEventListener('click', () => {{
+        const current = root.getAttribute('data-theme');
+        const next = current === 'dark' ? 'light' : 'dark';
+        applyTheme(next);
+        localStorage.setItem(themeKey, next);
+      }});
     }})();
   </script>
 </body>
