@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import contextlib
 import collections
+import html
 import json
 import logging
 import random
@@ -584,6 +585,82 @@ def _http_response(status: str, content_type: str, body: bytes) -> bytes:
     return "\r\n".join(headers).encode("ascii") + body
 
 
+def _params_want_html(params: Dict[str, str]) -> bool:
+    return (params.get("html") or "").lower() in ("1", "true", "yes", "on")
+
+
+def _control_feedback_html(
+    *,
+    ok: bool,
+    headline: str,
+    paragraphs: List[str],
+    pre_json: Optional[Any] = None,
+) -> bytes:
+    status_cls = "banner-ok" if ok else "banner-bad"
+    paras = "".join(f"<p class=\"detail\">{html.escape(p)}</p>" for p in paragraphs)
+    pre_block = ""
+    if pre_json is not None:
+        pre_block = (
+            "<p class=\"detail\"><b>Details (JSON)</b></p><pre>"
+            + html.escape(json.dumps(pre_json, indent=2))
+            + "</pre>"
+        )
+    page = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{html.escape(headline)} — DriverTranslator</title>
+  <style>
+    :root {{ color-scheme: light dark; }}
+    body {{
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      margin: 0; min-height: 100vh;
+      padding: 28px 20px 48px;
+      background: #f4f6f9; color: #0f172a;
+      line-height: 1.5;
+    }}
+    @media (prefers-color-scheme: dark) {{
+      body {{ background: #0f1218; color: #e8eaef; }}
+    }}
+    .wrap {{ max-width: 560px; margin: 0 auto; }}
+    .banner {{
+      padding: 22px 24px; border-radius: 14px; margin-bottom: 20px;
+      font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }}
+    .banner-ok {{ background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%); color: #14532d; border: 1px solid #86efac; }}
+    .banner-bad {{ background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); color: #7f1d1d; border: 1px solid #fca5a5; }}
+    @media (prefers-color-scheme: dark) {{
+      .banner-ok {{ background: linear-gradient(135deg, #14532d 0%, #166534 100%); color: #bbf7d0; border-color: #22c55e; }}
+      .banner-bad {{ background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%); color: #fecaca; border-color: #ef4444; }}
+    }}
+    .detail {{ margin: 0 0 14px 0; color: #64748b; font-size: 15px; }}
+    @media (prefers-color-scheme: dark) {{ .detail {{ color: #9aa3b2; }} }}
+    pre {{
+      background: #0f172a; color: #e2e8f0; padding: 16px 18px; border-radius: 12px;
+      overflow-x: auto; font-size: 12px; line-height: 1.45; border: 1px solid #334155;
+    }}
+    a {{
+      display: inline-block; margin-top: 8px; color: #2563eb; font-weight: 600;
+      text-decoration: none; padding: 10px 0;
+    }}
+    a:hover {{ text-decoration: underline; }}
+    @media (prefers-color-scheme: dark) {{ a {{ color: #7aa2ff; }} }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="banner {status_cls}">{html.escape(headline)}</div>
+    {paras}
+    {pre_block}
+    <p><a href="/">← Back to status</a></p>
+  </div>
+</body>
+</html>"""
+    return page.encode("utf-8")
+
+
 def _http_unauthorized() -> bytes:
     # Basic auth (password-only semantics; username ignored)
     headers = [
@@ -750,33 +827,150 @@ async def _handle_http_client(
 
             token = cfg.http_status_control_token
             if token and params.get("token") != token:
-                writer.write(_http_response("403 Forbidden", "text/plain", b"forbidden"))
+                if _params_want_html(params):
+                    writer.write(
+                        _http_response(
+                            "403 Forbidden",
+                            "text/html; charset=utf-8",
+                            _control_feedback_html(
+                                ok=False,
+                                headline="Not allowed",
+                                paragraphs=[
+                                    "Wrong or missing control token. "
+                                    "Set it in config (http_status.control_token) and use the same value in the link."
+                                ],
+                            ),
+                        )
+                    )
+                else:
+                    writer.write(_http_response("403 Forbidden", "text/plain", b"forbidden"))
                 return
 
             if path.startswith("/control/set"):
                 key = params.get("key", "")
                 value = params.get("value", "")
+                want_html = _params_want_html(params)
                 try:
                     if value.lower() in ("true", "1", "yes", "y", "on", "false", "0", "no", "n", "off"):
                         await runtime.set_bool(key, value.lower() in ("true", "1", "yes", "y", "on"))
                     else:
                         await runtime.set_int(key, int(value))
                 except Exception:
-                    writer.write(_http_response("400 Bad Request", "text/plain", b"bad control request"))
+                    bad_msg = (
+                        "Expected key amx_verify_after_set or rti_status_enabled with true/false, "
+                        "or amx_verify_timeout_ms with a number (100–5000)."
+                    )
+                    if want_html:
+                        writer.write(
+                            _http_response(
+                                "400 Bad Request",
+                                "text/html; charset=utf-8",
+                                _control_feedback_html(
+                                    ok=False,
+                                    headline="Could not apply setting",
+                                    paragraphs=[bad_msg],
+                                ),
+                            )
+                        )
+                    else:
+                        writer.write(_http_response("400 Bad Request", "text/plain", b"bad control request"))
                     return
-                body = (json.dumps(await runtime.snapshot(), indent=2) + "\n").encode("utf-8")
-                writer.write(_http_response("200 OK", "application/json", body))
+                snap = await runtime.snapshot()
+                if want_html:
+                    if key == "amx_verify_timeout_ms":
+                        paras = [
+                            f"amx_verify_timeout_ms is now {snap.get('amx_verify_timeout_ms')} ms.",
+                            "Takes effect immediately; no service restart needed.",
+                        ]
+                    elif key == "amx_verify_after_set":
+                        v = snap.get("amx_verify_after_set")
+                        paras = [
+                            f"amx_verify_after_set is now {str(v).lower()} (post-route AMX STREAM check).",
+                            "Takes effect immediately; no service restart needed.",
+                        ]
+                    elif key == "rti_status_enabled":
+                        v = snap.get("rti_status_enabled")
+                        paras = [
+                            f"rti_status_enabled is now {str(v).lower()} (UDP status heartbeat).",
+                            "Takes effect immediately; no service restart needed.",
+                        ]
+                    else:
+                        paras = [
+                            f"Updated setting {key!r}.",
+                            "Takes effect immediately; no service restart needed.",
+                        ]
+                    writer.write(
+                        _http_response(
+                            "200 OK",
+                            "text/html; charset=utf-8",
+                            _control_feedback_html(
+                                ok=True,
+                                headline="Saved",
+                                paragraphs=paras,
+                                pre_json={
+                                    "amx_verify_after_set": snap.get("amx_verify_after_set"),
+                                    "amx_verify_timeout_ms": snap.get("amx_verify_timeout_ms"),
+                                    "rti_status_enabled": snap.get("rti_status_enabled"),
+                                },
+                            ),
+                        )
+                    )
+                else:
+                    body = (json.dumps(snap, indent=2) + "\n").encode("utf-8")
+                    writer.write(_http_response("200 OK", "application/json", body))
                 return
 
             if path.startswith("/control/selftest"):
                 res = await _amx_self_test(cfg=cfg, amx=amx)
-                body = (json.dumps(res, indent=2) + "\n").encode("utf-8")
-                writer.write(_http_response("200 OK", "application/json", body))
+                total = int(res.get("total") or 0)
+                ok_n = int(res.get("ok") or 0)
+                all_ok = total == 0 or ok_n == total
+                if _params_want_html(params):
+                    if total == 0:
+                        paras = ["No RX / decoders are configured in this profile."]
+                    else:
+                        paras = [f"TCP connect to port {cfg.amx_decoder_port}: {ok_n} of {total} reachable."]
+                        unr = res.get("unreachable") or []
+                        if unr:
+                            paras.append("Unreachable: " + ", ".join(str(x) for x in unr))
+                        else:
+                            paras.append("All configured decoder IPs accepted a connection.")
+                    writer.write(
+                        _http_response(
+                            "200 OK",
+                            "text/html; charset=utf-8",
+                            _control_feedback_html(
+                                ok=all_ok,
+                                headline="Self-test passed" if all_ok else "Self-test: issues found",
+                                paragraphs=paras,
+                                pre_json=res,
+                            ),
+                        )
+                    )
+                else:
+                    body = (json.dumps(res, indent=2) + "\n").encode("utf-8")
+                    writer.write(_http_response("200 OK", "application/json", body))
                 return
 
             if path.startswith("/control/reboot"):
-                body = (json.dumps({"ok": True, "action": "rebooting"}, indent=2) + "\n").encode("utf-8")
-                writer.write(_http_response("200 OK", "application/json", body))
+                if _params_want_html(params):
+                    writer.write(
+                        _http_response(
+                            "200 OK",
+                            "text/html; charset=utf-8",
+                            _control_feedback_html(
+                                ok=True,
+                                headline="Reboot scheduled",
+                                paragraphs=[
+                                    "The machine will restart shortly. This page and SSH will drop until the system is back.",
+                                    "Open the status page again after boot if you need to confirm the service.",
+                                ],
+                            ),
+                        )
+                    )
+                else:
+                    body = (json.dumps({"ok": True, "action": "rebooting"}, indent=2) + "\n").encode("utf-8")
+                    writer.write(_http_response("200 OK", "application/json", body))
                 asyncio.create_task(_do_reboot(reason="http_basic_auth"))
                 return
 
@@ -803,6 +997,7 @@ async def _handle_http_client(
             route_html = "\n".join(route_rows)
             _ct = cfg.http_status_control_token or ""
             ctl_qs = ("&token=" + urllib.parse.quote_plus(_ct)) if _ct else ""
+            ctl_selftest_reboot = ("?" + ctl_qs[1:] + "&html=1") if ctl_qs else "?html=1"
             body = f"""<!doctype html>
 <html>
 <head>
@@ -1093,7 +1288,7 @@ async def _handle_http_client(
       <div><b>AMX verify after switch</b><span class="help-icon" title="When ON, after each route the translator asks each affected decoder for STREAM via AMX. Mismatches send rti_notify only; RTI still gets an immediate matrix ack.">?</span></div>
       <div class="ctrl-actions">
         <code>{str(rt['amx_verify_after_set']).lower()}</code>
-        <a href="/control/set?key=amx_verify_after_set&value={'false' if rt['amx_verify_after_set'] else 'true'}{ctl_qs}">Toggle</a>
+        <a href="/control/set?key=amx_verify_after_set&value={'false' if rt['amx_verify_after_set'] else 'true'}{ctl_qs}&html=1">Toggle</a>
       </div>
     </div>
     <div class="row">
@@ -1108,16 +1303,16 @@ async def _handle_http_client(
       <div><b>RTI status heartbeat</b><span class="help-icon" title="When ON, DriverTranslator sends periodic DTSTATUS lines to your rti_status UDP target (if enabled in config). No service restart needed.">?</span></div>
       <div class="ctrl-actions">
         <code>{str(rt['rti_status_enabled']).lower()}</code>
-        <a href="/control/set?key=rti_status_enabled&value={'false' if rt['rti_status_enabled'] else 'true'}{ctl_qs}">Toggle</a>
+        <a href="/control/set?key=rti_status_enabled&value={'false' if rt['rti_status_enabled'] else 'true'}{ctl_qs}&html=1">Toggle</a>
       </div>
     </div>
     <div class="row">
       <div><b>AMX self-test</b><span class="help-icon" title="Short TCP connect to every configured decoder IP (port 50002). Returns JSON with reachability. In dry-run mode all decoders count as reachable without connecting.">?</span></div>
-      <div class="ctrl-actions"><a href="/control/selftest{('?' + ctl_qs[1:]) if ctl_qs else ''}">Run now</a></div>
+      <div class="ctrl-actions"><a href="/control/selftest{ctl_selftest_reboot}">Run now</a></div>
     </div>
     <div class="row">
       <div><b>Reboot host</b><span class="help-icon" title="Reboots this Linux machine (systemctl reboot). SSH and this page drop until the system is back.">?</span></div>
-      <div class="ctrl-actions"><a href="/control/reboot{('?' + ctl_qs[1:]) if ctl_qs else ''}">Reboot</a></div>
+      <div class="ctrl-actions"><a href="/control/reboot{ctl_selftest_reboot}">Reboot</a></div>
     </div>
   </div>
 
@@ -1165,7 +1360,7 @@ async def _handle_http_client(
         applyVerifyTo.addEventListener('click', () => {{
           const v = String(parseInt(verifyTo.value || '800', 10));
           // If control_token is configured, append &token=... manually in the address bar.
-          window.location.href = `/control/set?key=amx_verify_timeout_ms&value=${{encodeURIComponent(v)}}{ctl_qs}`;
+          window.location.href = `/control/set?key=amx_verify_timeout_ms&value=${{encodeURIComponent(v)}}{ctl_qs}&html=1`;
         }});
       }}
     }})();
