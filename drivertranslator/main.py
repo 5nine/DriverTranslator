@@ -1360,7 +1360,7 @@ async def _handle_http_client(
   <div class="topbar">
     <div class="brand">
       <h1>DriverTranslator</h1>
-      <span>Status &amp; controls</span>
+      <span>Status &amp; controls · full page reload every 5s while this tab is visible</span>
     </div>
     <button class="btn" id="themeBtn" type="button">Theme</button>
   </div>
@@ -1630,6 +1630,10 @@ async def _handle_http_client(
         applyTheme(next);
         localStorage.setItem(themeKey, next);
       }});
+
+      setInterval(function () {{
+        if (!document.hidden) location.reload();
+      }}, 5000);
     }})();
   </script>
 </body>
