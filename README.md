@@ -96,6 +96,8 @@ Set `bind` to your **control NIC** IP so it’s only reachable on the control ne
 If you want to allow changing runtime settings from the page (Controls section), set a `control_token` and include it in control URLs (example):  
 `/control/set?key=amx_verify_after_set&value=false&token=YOURTOKEN`
 
+The status webpage requires **Basic auth**. Set `http_status.password` (installer default: `1234`).
+
 ---
 
 ## RTI feedback via “Two Way Strings”
@@ -144,6 +146,27 @@ Example `config.json`:
 Message format:
 
 `DTSTATUS: mode=persistent rti_clients=1 amx_connected=12/40 tx_total=10 rx_total=40`
+
+### Optional UDP control (reboot)
+
+Enable UDP reboot control (no token; exact string match). Recommended only on a private network.
+
+Example `config.json`:
+
+```json
+{
+  "rti_control": {
+    "enabled": true,
+    "bind_address": "0.0.0.0",
+    "port": 30003,
+    "reboot_command": "DT REBOOT"
+  }
+}
+```
+
+Send this exact UDP payload from RTI:
+
+- `DT REBOOT`
 
 ---
 

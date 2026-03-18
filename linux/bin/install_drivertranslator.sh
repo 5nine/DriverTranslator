@@ -182,6 +182,8 @@ if [[ "$DO_CONFIG" -eq 1 ]]; then
     HTTP_PORT="${HTTP_PORT:-8080}"
     read -r -p "HTTP log lines on page (default 200): " HTTP_LOGLINES
     HTTP_LOGLINES="${HTTP_LOGLINES:-200}"
+    read -r -p "HTTP webpage password (Basic auth) (default 1234): " HTTP_PW
+    HTTP_PW="${HTTP_PW:-1234}"
 
     read -r -p "Enable RTI problems-only notify (Two Way Strings)? (y/N): " RTI_PROB
     RTI_PROB="${RTI_PROB:-N}"
@@ -256,6 +258,7 @@ rti_stat_enabled = "${RTI_STAT}".strip().lower() in ("y","yes","true","1","on")
 rti_stat_host = "${RTI_STAT_HOST}".strip() or None
 rti_stat_port = int("${RTI_STAT_PORT}")
 rti_stat_int = int("${RTI_STAT_INT}")
+http_pw = "${HTTP_PW}".strip() or "1234"
 
 tx = []
 for i in range(tx_count):
@@ -305,7 +308,8 @@ cfg = {
   "server": { "send_startup_notify_endpoint_online": True },
   "rti_notify": { "enabled": rti_prob_enabled, "protocol": "udp", "host": rti_prob_host, "port": rti_prob_port, "bind_address": None, "min_interval_seconds": 10, "repeat_suppression_seconds": 300 },
   "rti_status": { "enabled": rti_stat_enabled, "protocol": "udp", "host": rti_stat_host, "port": rti_stat_port, "bind_address": None, "interval_seconds": rti_stat_int },
-  "http_status": { "enabled": http_enabled, "bind": http_bind, "port": http_port, "log_lines": http_log_lines, "control_token": None }
+  "http_status": { "enabled": http_enabled, "bind": http_bind, "port": http_port, "log_lines": http_log_lines, "control_token": None, "password": http_pw },
+  "rti_control": { "enabled": False, "bind_address": None, "port": 0, "reboot_command": "DT REBOOT" }
 }
 
 Path("${CONFIG_PATH}").write_text(json.dumps(cfg, indent=2) + "\\n", encoding="utf-8")

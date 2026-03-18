@@ -164,6 +164,11 @@ class Config:
     http_status_port: int
     http_status_log_lines: int
     http_status_control_token: Optional[str]
+    http_status_password: str
+    rti_control_enabled: bool
+    rti_control_bind_address: Optional[str]
+    rti_control_port: int
+    rti_control_reboot_command: str
 
 
 def load_config(path: str) -> Config:
@@ -217,6 +222,7 @@ def load_config(path: str) -> Config:
     rti_notify = raw.get("rti_notify", {})
     rti_status = raw.get("rti_status", {})
     http_status = raw.get("http_status", {})
+    rti_control = raw.get("rti_control", {})
 
     tx_by_alias = {t.alias: t for t in txs}
     tx_by_hostname = {t.hostname: t for t in txs}
@@ -274,6 +280,11 @@ def load_config(path: str) -> Config:
         http_status_port=_as_int(http_status.get("port"), default=8080),
         http_status_log_lines=_as_int(http_status.get("log_lines"), default=200),
         http_status_control_token=_opt_str(http_status.get("control_token")),
+        http_status_password=str(http_status.get("password", "1234")),
+        rti_control_enabled=_as_bool(rti_control.get("enabled"), default=False),
+        rti_control_bind_address=_bind_addr(rti_control.get("bind_address")),
+        rti_control_port=_as_int(rti_control.get("port"), default=0),
+        rti_control_reboot_command=str(rti_control.get("reboot_command", "reboot")).strip() or "reboot",
     )
 
 
@@ -519,6 +530,15 @@ def _parse_amx_status(data: bytes) -> Dict[str, str]:
     return out
 
 
+async def _do_reboot(*, reason: str) -> None:
+    LOG.error("REBOOT requested: %s", reason)
+    await asyncio.sleep(1.0)
+    try:
+        subprocess.Popen(["/usr/bin/systemctl", "reboot"])
+    except FileNotFoundError:
+        subprocess.Popen(["systemctl", "reboot"])
+
+
 async def _amx_self_test(*, cfg: Config, amx: Any) -> Dict[str, Any]:
     """
     Connectivity self-test: attempt to connect to each configured decoder IP.
@@ -560,6 +580,45 @@ def _http_response(status: str, content_type: str, body: bytes) -> bytes:
         "",
     ]
     return "\r\n".join(headers).encode("ascii") + body
+
+
+def _http_unauthorized() -> bytes:
+    # Basic auth (password-only semantics; username ignored)
+    headers = [
+        "HTTP/1.1 401 Unauthorized",
+        'WWW-Authenticate: Basic realm="DriverTranslator"',
+        "Content-Type: text/plain",
+        "Content-Length: 12",
+        "Connection: close",
+        "",
+        "",
+    ]
+    return "\r\n".join(headers).encode("ascii") + b"unauthorized"
+
+
+def _parse_basic_auth_password(data: bytes) -> Optional[str]:
+    try:
+        text = data.decode("iso-8859-1", errors="replace")
+    except Exception:
+        return None
+    # Look for Authorization header in the initial read buffer
+    for line in text.split("\r\n"):
+        if line.lower().startswith("authorization:"):
+            v = line.split(":", 1)[1].strip()
+            if not v.lower().startswith("basic "):
+                return None
+            import base64
+
+            b64 = v.split(None, 1)[1].strip()
+            try:
+                raw = base64.b64decode(b64).decode("utf-8", errors="replace")
+            except Exception:
+                return None
+            # raw is "user:pass"
+            if ":" in raw:
+                return raw.split(":", 1)[1]
+            return ""
+    return None
 
 
 def _format_uptime(seconds: int) -> str:
@@ -628,6 +687,14 @@ async def _handle_http_client(
             return
         if not data:
             return
+
+        # Require Basic auth for the entire webpage (and JSON endpoints).
+        if cfg.http_status_password:
+            pw = _parse_basic_auth_password(data)
+            if pw != cfg.http_status_password:
+                writer.write(_http_unauthorized())
+                return
+
         line = data.split(b"\r\n", 1)[0].decode("ascii", errors="replace")
         parts = line.split()
         if len(parts) < 2:
@@ -667,6 +734,7 @@ async def _handle_http_client(
         # Basic control endpoints (optional token).
         # /control/set?key=<k>&value=<v>[&token=<t>]
         # /control/selftest?[token=<t>]
+        # /control/reboot
         if path.startswith("/control/"):
             # very small query parsing (no urllib dependency)
             qs = ""
@@ -702,6 +770,12 @@ async def _handle_http_client(
                 res = await _amx_self_test(cfg=cfg, amx=amx)
                 body = (json.dumps(res, indent=2) + "\n").encode("utf-8")
                 writer.write(_http_response("200 OK", "application/json", body))
+                return
+
+            if path.startswith("/control/reboot"):
+                body = (json.dumps({"ok": True, "action": "rebooting"}, indent=2) + "\n").encode("utf-8")
+                writer.write(_http_response("200 OK", "application/json", body))
+                asyncio.create_task(_do_reboot(reason="http_basic_auth"))
                 return
 
             writer.write(_http_response("404 Not Found", "text/plain", b"not found"))
@@ -1464,6 +1538,30 @@ class RuntimeSettings:
                 raise KeyError(key)
 
 
+class _RtiControlUdp(asyncio.DatagramProtocol):
+    def __init__(self, *, cfg: Config):
+        self._cfg = cfg
+        self._last_reboot_at = 0.0
+
+    def datagram_received(self, data: bytes, addr) -> None:  # type: ignore[override]
+        if not self._cfg.rti_control_enabled:
+            return
+        text = data.decode("utf-8", errors="replace").strip()
+        if not text:
+            return
+        want = (self._cfg.rti_control_reboot_command or "reboot").strip()
+        if text.lower() != want.lower():
+            return
+
+        now = time.monotonic()
+        if (now - self._last_reboot_at) < 60:
+            LOG.warning("RTI control reboot suppressed (cooldown)")
+            return
+        self._last_reboot_at = now
+        LOG.error("RTI control requested reboot from %s", addr)
+        asyncio.create_task(_do_reboot(reason=f"rti_udp:{addr}"))
+
+
 def _lookup_tx(cfg: Config, token: str) -> Optional[Tx]:
     return cfg.tx_by_alias.get(token) or cfg.tx_by_hostname.get(token)
 
@@ -1969,6 +2067,15 @@ async def handle_client(
 
 async def run_server(*, cfg: Config, listen: str, port: int) -> None:
     started_at = time.monotonic()
+    # Optional RTI UDP control listener (e.g., reboot command)
+    if cfg.rti_control_enabled and cfg.rti_control_port > 0:
+        loop = asyncio.get_running_loop()
+        bind = cfg.rti_control_bind_address or "0.0.0.0"
+        await loop.create_datagram_endpoint(
+            lambda: _RtiControlUdp(cfg=cfg),
+            local_addr=(bind, cfg.rti_control_port),
+        )
+        LOG.warning("RTI control UDP listening on %s:%d", bind, cfg.rti_control_port)
     if cfg.amx_bind_address:
         LOG.info("AMX outbound connections will bind to %s (AVoIP NIC)", cfg.amx_bind_address)
 

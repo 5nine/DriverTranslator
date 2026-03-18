@@ -68,7 +68,14 @@
     "bind": "0.0.0.0",
     "port": 8080,
     "log_lines": 200,
-    "control_token": null
+    "control_token": null,
+    "password": "1234"
+  },
+  "rti_control": {
+    "enabled": false,
+    "bind_address": null,
+    "port": 0,
+    "reboot_command": "DT REBOOT"
   }
 }
 
