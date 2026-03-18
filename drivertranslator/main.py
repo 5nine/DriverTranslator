@@ -602,7 +602,11 @@ async def _handle_http_client(
     started_at: float,
 ) -> None:
     try:
-        data = await asyncio.wait_for(reader.read(4096), timeout=2.0)
+        try:
+            data = await asyncio.wait_for(reader.read(4096), timeout=2.0)
+        except asyncio.TimeoutError:
+            # Common with port scans / health checks that connect but don't send a request.
+            return
         if not data:
             return
         line = data.split(b"\r\n", 1)[0].decode("ascii", errors="replace")
