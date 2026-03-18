@@ -1044,6 +1044,8 @@ class DryRunAmxClient:
     def __init__(self, *, decoder_port: int, offline_decoders: Optional[List[str]] = None):
         self._decoder_port = decoder_port
         self._offline = {x.strip() for x in (offline_decoders or []) if str(x).strip()}
+        if self._offline:
+            LOG.warning("AMX (dry-run) offline simulation enabled for %d decoder(s): %s", len(self._offline), sorted(self._offline))
 
     async def set_stream(self, *, decoder_ip: str, stream: int) -> None:
         if stream <= 0:
@@ -1972,6 +1974,11 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
 
     if cfg.amx_dry_run:
         LOG.warning("AMX dry-run enabled: no TCP connections will be made.")
+        if cfg.amx_dry_run_offline_decoders:
+            LOG.warning(
+                "AMX dry-run offline simulation decoders: %s",
+                ", ".join(cfg.amx_dry_run_offline_decoders),
+            )
         amx: Any = DryRunAmxClient(
             decoder_port=cfg.amx_decoder_port,
             offline_decoders=cfg.amx_dry_run_offline_decoders,
