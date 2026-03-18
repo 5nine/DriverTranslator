@@ -2232,7 +2232,84 @@ def _all_endpoint_aliases(cfg: Config) -> List[str]:
     return list(cfg.tx_by_alias.keys()) + list(cfg.rx_by_alias.keys())
 
 
-def _handle_config_get(cfg: Config, session: NhdCtlSession, cmd: str) -> List[str]:
+def _emulated_multicast_ips(*, stream_id: int) -> Tuple[str, str]:
+    """Stable fake multicast addresses for TX status (100/200-series style API)."""
+    s = max(0, int(stream_id))
+    v = 16 + (s % 200)
+    a = 40 + (s * 7 % 200)
+    return (f"224.{v}.{a}.{200 + (s % 55)}", f"224.{v + 32}.{a}.{200 + (s % 55)}")
+
+
+def _device_status_tx_dict(tx: Tx) -> Dict[str, str]:
+    vid, aud = _emulated_multicast_ips(stream_id=tx.amx_stream)
+    return {
+        "aliasname": tx.alias,
+        "audio stream ip address": aud,
+        "encoding enable": "true",
+        "hdmi in active": "true",
+        "hdmi in frame rate": "60",
+        "line out audio enable": "false",
+        "name": tx.hostname,
+        "resolution": "1920x1080",
+        "stream frame rate": "60",
+        "stream resolution": "1920x1080",
+        "video stream ip address": vid,
+    }
+
+
+def _device_status_rx_dict(rx: Rx, state: NhdState) -> Dict[str, str]:
+    online = bool(state.rx_online.get(rx.alias, True))
+    routed_tx = state.video.get(rx.alias)
+    if online and routed_tx:
+        return {
+            "aliasname": rx.alias,
+            "audio bitrate": "3072000",
+            "audio input format": "lpcm",
+            "hdcp status": "hdcp22",
+            "hdmi out active": "true",
+            "hdmi out audio enable": "true",
+            "hdmi out frame rate": "60",
+            "hdmi out resolution": "1920x1080",
+            "line out audio enable": "true",
+            "name": rx.hostname,
+            "stream error count": "0",
+            "stream frame rate": "60",
+            "stream resolution": "1920x1080",
+        }
+    if online:
+        return {
+            "aliasname": rx.alias,
+            "audio bitrate": "0",
+            "audio input format": "lpcm",
+            "hdcp status": "none",
+            "hdmi out active": "false",
+            "hdmi out audio enable": "false",
+            "hdmi out frame rate": "0",
+            "hdmi out resolution": "unknown",
+            "line out audio enable": "false",
+            "name": rx.hostname,
+            "stream error count": "0",
+            "stream frame rate": "0",
+            "stream resolution": "unknown",
+        }
+    return {
+        "aliasname": rx.alias,
+        "audio bitrate": "0",
+        "audio input format": "unknown",
+        "hdcp status": "none",
+        "hdmi out active": "false",
+        "hdmi out audio enable": "false",
+        "hdmi out frame rate": "0",
+        "hdmi out resolution": "unknown",
+        "line out audio enable": "false",
+        "name": rx.hostname,
+        "stream error count": "65535",
+        "stream frame rate": "0",
+        "stream resolution": "unknown",
+    }
+
+
+def _handle_config_get(cfg: Config, session: NhdCtlSession, state: NhdState, cmd: str) -> List[str]:
     parts = cmd.split()
     if parts[:3] == ["config", "get", "version"]:
         return [
@@ -2301,6 +2378,52 @@ def _handle_config_get(cfg: Config, session: NhdCtlSession, cmd: str) -> List[st
                 else:
                     return ["unknown command"]
         return ["devices json info: " + json.dumps({"devices": devices}, separators=(",", ":"))]
+
+    # Section 13.2 — device real-time status (100/110/140/200-tier JSON shape, API v6.6 / Appendix-style).
+    if parts[:4] == ["config", "get", "device", "status"]:
+        tok = parts[4:]
+
+        def _pack(rows: List[Dict[str, str]]) -> List[str]:
+            body = {"devices status": rows}
+            return ["devices status info:", json.dumps(body, separators=(",", ":"))]
+
+        if len(tok) == 0:
+            rows: List[Dict[str, str]] = []
+            for t in cfg.tx_by_alias.values():
+                rows.append(_device_status_tx_dict(t))
+            for r in cfg.rx_by_alias.values():
+                rows.append(_device_status_rx_dict(r, state))
+            return _pack(rows)
+
+        if len(tok) == 1:
+            tx = _lookup_tx(cfg, tok[0])
+            if tx is not None:
+                return _pack([_device_status_tx_dict(tx)])
+            rx = _lookup_rx(cfg, tok[0])
+            if rx is not None:
+                return _pack([_device_status_rx_dict(rx, state)])
+            return ["unknown command"]
+
+        if len(tok) == 2:
+            a, b = tok[0], tok[1]
+            tx_a, rx_a = _lookup_tx(cfg, a), _lookup_rx(cfg, a)
+            tx_b, rx_b = _lookup_tx(cfg, b), _lookup_rx(cfg, b)
+            tx: Optional[Tx] = None
+            rx: Optional[Rx] = None
+            if tx_a and rx_b:
+                tx, rx = tx_a, rx_b
+            elif tx_b and rx_a:
+                tx, rx = tx_b, rx_a
+            elif rx_a and tx_b:
+                tx, rx = tx_b, rx_a
+            elif rx_b and tx_a:
+                tx, rx = tx_a, rx_b
+            if tx is None or rx is None:
+                return ["unknown command"]
+            # API example order: TX (source) object first, then RX (display).
+            return _pack([_device_status_tx_dict(tx), _device_status_rx_dict(rx, state)])
+
+        return ["unknown command"]
 
     return ["unknown command"]
 
@@ -2609,6 +2732,30 @@ async def handle_client(
             # Matrix query commands used for RTI feedback variables
             if lower.startswith("matrix ") and " get" in lower:
                 parts = line.split()
+                # matrix get [<RX...>]  — primary all-media assignments (§13.3)
+                if len(parts) >= 2 and parts[0].lower() == "matrix" and parts[1].lower() == "get":
+                    rx_tokens = parts[2:]
+                    rx_aliases_m: List[str] = []
+                    if rx_tokens:
+                        for tok in rx_tokens:
+                            rx_obj = _lookup_rx(cfg, tok)
+                            if rx_obj is None:
+                                writer.write(_crlf("unknown command"))
+                                await writer.drain()
+                                break
+                            rx_aliases_m.append(rx_obj.alias)
+                        else:
+                            pass
+                    else:
+                        rx_aliases_m = list(cfg.rx_by_alias.keys())
+                    if len(rx_tokens) and len(rx_aliases_m) != len(rx_tokens):
+                        continue
+                    for resp_line in _format_matrix_info(
+                        heading="matrix", mapping=state.video, rx_aliases=rx_aliases_m
+                    ):
+                        writer.write(_crlf(resp_line))
+                    await writer.drain()
+                    continue
                 # Examples:
                 # matrix video get [<RX...>]
                 # matrix audio get [<RX...>]
@@ -2667,7 +2814,7 @@ async def handle_client(
                 continue
 
             if lower.startswith("config get "):
-                for resp_line in _handle_config_get(cfg, session, line):
+                for resp_line in _handle_config_get(cfg, session, state, line):
                     writer.write(_crlf(resp_line))
                 await writer.drain()
                 continue
