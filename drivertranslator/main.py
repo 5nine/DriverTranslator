@@ -932,6 +932,7 @@ async def _handle_http_client(
     </div>
     <div class="row"><div>RTI status heartbeat</div><div><code>{str(rt['rti_status_enabled']).lower()}</code> <a href="/control/set?key=rti_status_enabled&value={'false' if rt['rti_status_enabled'] else 'true'}">toggle</a></div></div>
     <div class="row"><div>AMX self-test</div><div><a href="/control/selftest">run now</a></div></div>
+    <div class="row"><div>Reboot host</div><div><a href="/control/reboot">reboot now</a></div></div>
   </div>
   <h3>Matrix (set by RTI)</h3>
   <p class="subtle">Shows the current emulated WyreStorm matrix state (RX → TX) based on the last commands received from RTI. <code>NULL</code> means “no source assigned”.</p>
