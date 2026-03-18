@@ -1049,6 +1049,7 @@ class DryRunAmxClient:
         if stream <= 0:
             raise ValueError(f"Invalid AMX stream id: {stream}")
         if decoder_ip in self._offline:
+            LOG.error("AMX (dry-run) simulated OFFLINE decoder: %s:%d", decoder_ip, self._decoder_port)
             raise ConnectionError(f"(dry-run) Simulated offline decoder: {decoder_ip}:{self._decoder_port}")
         cmd = f"set:{stream}\\r".encode("ascii")
         LOG.info("AMX (dry-run) -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
@@ -2000,6 +2001,11 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
         )
 
     state = NhdState(cfg)
+    if cfg.amx_dry_run and cfg.amx_dry_run_offline_decoders:
+        offline = {x.strip() for x in cfg.amx_dry_run_offline_decoders if str(x).strip()}
+        for rx in cfg.rx_by_alias.values():
+            if rx.amx_decoder_ip in offline:
+                state.set_rx_online(rx.alias, False)
     health = HealthState()
     runtime = RuntimeSettings(cfg)
     problems = ProblemState()
