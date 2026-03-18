@@ -105,7 +105,9 @@ def _render_netplan_yaml(
         lines.append(f"      addresses: [{addr}/{prefix}]")
         if gw:
             _validate_ipv4(gw)
-            lines.append(f"      gateway4: {gw}")
+            lines.append("      routes:")
+            lines.append("        - to: default")
+            lines.append(f"          via: {gw}")
         if dns:
             for d in dns:
                 _validate_ipv4(str(d))
@@ -134,6 +136,8 @@ def write_netplan(path: Path, yaml_text: str) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(yaml_text, encoding="utf-8")
     tmp.replace(path)
+    # netplan warns if config permissions are too open
+    path.chmod(0o600)
 
 
 def main() -> int:
