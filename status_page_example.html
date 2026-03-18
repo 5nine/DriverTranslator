@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -7,195 +7,319 @@
   <style>
     :root {
       color-scheme: light dark;
-      --bg: #ffffff;
-      --fg: #111111;
-      --muted: #666666;
+      --bg: #f4f6fa;
+      --fg: #1a1d24;
+      --muted: #5c6470;
       --card: #ffffff;
-      --border: #dddddd;
-      --row: #f0f0f0;
-      --code-bg: #f6f6f6;
-      --code-fg: #111111;
-      --log-bg: #0b1020;
-      --log-fg: #e6e6e6;
-      --link: #0b5fff;
+      --border: #e2e6ee;
+      --row: #f8f9fc;
+      --code-bg: #eef1f7;
+      --code-fg: #1a1d24;
+      --log-bg: #0d1117;
+      --log-fg: #d8dee9;
+      --link: #2563eb;
+      --accent: #2563eb;
+      --accent-soft: rgba(37, 99, 235, 0.1);
+      --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.04);
     }
 
     @media (prefers-color-scheme: dark) {
       :root {
-        --bg: #0b0d12;
-        --fg: #e9edf1;
-        --muted: #a9b1ba;
-        --card: #111521;
-        --border: #223046;
-        --row: #1a2233;
-        --code-bg: #0f1420;
-        --code-fg: #e9edf1;
-        --log-bg: #0b1020;
-        --log-fg: #e6e6e6;
-        --link: #8ab4ff;
+        --bg: #0f1218;
+        --fg: #e8eaef;
+        --muted: #9aa3b2;
+        --card: #161b24;
+        --border: #2a3344;
+        --row: #1c2330;
+        --code-bg: #1e2635;
+        --code-fg: #e8eaef;
+        --log-bg: #0d1117;
+        --log-fg: #d8dee9;
+        --link: #7aa2ff;
+        --accent: #7aa2ff;
+        --accent-soft: rgba(122, 162, 255, 0.12);
+        --shadow: 0 1px 3px rgba(0,0,0,0.25), 0 8px 28px rgba(0,0,0,0.2);
       }
     }
 
     [data-theme="light"] {
-      --bg: #ffffff;
-      --fg: #111111;
-      --muted: #666666;
+      --bg: #f4f6fa;
+      --fg: #1a1d24;
+      --muted: #5c6470;
       --card: #ffffff;
-      --border: #dddddd;
-      --row: #f0f0f0;
-      --code-bg: #f6f6f6;
-      --code-fg: #111111;
-      --log-bg: #0b1020;
-      --log-fg: #e6e6e6;
-      --link: #0b5fff;
+      --border: #e2e6ee;
+      --row: #f8f9fc;
+      --code-bg: #eef1f7;
+      --code-fg: #1a1d24;
+      --log-bg: #0d1117;
+      --log-fg: #d8dee9;
+      --link: #2563eb;
+      --accent: #2563eb;
+      --accent-soft: rgba(37, 99, 235, 0.1);
+      --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.04);
     }
 
     [data-theme="dark"] {
-      --bg: #0b0d12;
-      --fg: #e9edf1;
-      --muted: #a9b1ba;
-      --card: #111521;
-      --border: #223046;
-      --row: #1a2233;
-      --code-bg: #0f1420;
-      --code-fg: #e9edf1;
-      --log-bg: #0b1020;
-      --log-fg: #e6e6e6;
-      --link: #8ab4ff;
+      --bg: #0f1218;
+      --fg: #e8eaef;
+      --muted: #9aa3b2;
+      --card: #161b24;
+      --border: #2a3344;
+      --row: #1c2330;
+      --code-bg: #1e2635;
+      --code-fg: #e8eaef;
+      --log-bg: #0d1117;
+      --log-fg: #d8dee9;
+      --link: #7aa2ff;
+      --accent: #7aa2ff;
+      --accent-soft: rgba(122, 162, 255, 0.12);
+      --shadow: 0 1px 3px rgba(0,0,0,0.25), 0 8px 28px rgba(0,0,0,0.2);
     }
 
+    * { box-sizing: border-box; }
     body {
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      margin: 24px;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      margin: 0;
+      min-height: 100vh;
       background: var(--bg);
       color: var(--fg);
+      line-height: 1.45;
     }
 
-    a { color: var(--link); }
+    .wrap { max-width: 880px; margin: 0 auto; padding: 28px 20px 48px; }
 
-    .topbar {
-      max-width: 720px;
+    a { color: var(--link); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .hero {
       display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
       justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 12px;
+      gap: 16px;
+      margin-bottom: 24px;
     }
+    .hero h1 {
+      margin: 0 0 6px 0;
+      font-size: 1.65rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .hero .tagline { margin: 0; color: var(--muted); font-size: 14px; max-width: 520px; }
 
     .btn {
       border: 1px solid var(--border);
       background: var(--card);
       color: var(--fg);
-      padding: 6px 10px;
-      border-radius: 8px;
+      padding: 8px 14px;
+      border-radius: 10px;
       cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn:hover { background: var(--row); border-color: var(--accent); }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .btn-primary:hover { filter: brightness(1.06); }
+
+    .card {
+      padding: 20px 22px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+      margin-bottom: 20px;
+    }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .row:last-child { border-bottom: 0; padding-bottom: 0; }
+    .row:first-child { padding-top: 0; }
+
+    .ctrl-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: flex-end; }
+
+    code {
+      background: var(--code-bg);
+      color: var(--code-fg);
+      padding: 3px 8px;
+      border-radius: 8px;
       font-size: 13px;
     }
 
-    .card { max-width: 720px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
-    .row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--row); }
-    .row:last-child { border-bottom: 0; }
-    code { background: var(--code-bg); color: var(--code-fg); padding: 2px 6px; border-radius: 6px; }
-    pre { white-space: pre-wrap; background: var(--log-bg); color: var(--log-fg); padding: 12px; border-radius: 10px; overflow-x: auto; }
-    .subtle { color: var(--muted); font-size: 12px; }
-    .help-icon {
-      display: inline-flex; align-items: center; justify-content: center;
-      width: 1.1em; height: 1.1em; margin-left: 6px; font-size: 11px; font-weight: 700;
-      border: 1px solid var(--border); border-radius: 50%; color: var(--muted); cursor: help;
-      vertical-align: middle; line-height: 1;
+    .section-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: 28px 0 10px 0;
+      border-left: 3px solid var(--accent);
+      padding-left: 10px;
     }
-    .ctrl-desc { color: var(--muted); font-size: 12px; font-weight: normal; margin-top: 4px; max-width: 420px; }
+
+    .links-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      align-items: center;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .links-bar a { font-weight: 500; }
+
+    .subtle { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0 0 14px 0; max-width: 720px; }
+
+    .help-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      margin-left: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      color: var(--muted);
+      cursor: help;
+      vertical-align: middle;
+      line-height: 1;
+      background: var(--row);
+    }
+
+    .table-wrap {
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      margin-bottom: 8px;
+    }
+    table { border-collapse: collapse; width: 100%; background: var(--card); }
+    thead th {
+      background: var(--accent-soft);
+      color: var(--fg);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 600;
+      padding: 12px 14px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    tbody tr { transition: background 0.1s; }
+    tbody tr:nth-child(even) { background: var(--row); }
+    tbody tr:hover { background: var(--accent-soft); }
+    tbody td { padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 14px; }
+    tbody tr:last-child td { border-bottom: 0; }
+
+    pre {
+      white-space: pre-wrap;
+      background: var(--log-bg);
+      color: var(--log-fg);
+      padding: 16px 18px;
+      border-radius: 12px;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.45;
+      border: 1px solid var(--border);
+    }
+
+    .ok { color: #16a34a; font-weight: 600; }
+    .bad { color: #dc2626; font-weight: 600; }
   </style>
 </head>
 <body>
-  <div class="topbar">
-    <h2 style="margin:0;">DriverTranslator Status</h2>
-    <button class="btn" id="themeBtn" type="button">Toggle theme</button>
-  </div>
-  <div class="card">
-    <div class="row"><div>Uptime</div><div><code>5h 07m 12s</code></div></div>
-    <div class="row"><div>Mode</div><div><code>persistent</code></div></div>
-    <div class="row"><div>RTI clients</div><div><code>1</code></div></div>
-    <div class="row"><div>Configured TX</div><div><code>10</code></div></div>
-    <div class="row"><div>Configured RX</div><div><code>40</code></div></div>
-    <div class="row"><div>AMX connections (persistent)</div><div><code>38/40</code></div></div>
-    <div class="row"><div>AMX set retries</div><div><code>attempts=3</code> <code>backoff=200-1200ms</code></div></div>
-  </div>
+  <div class="wrap">
+    <div class="hero">
+      <div>
+        <h1>DriverTranslator</h1>
+        <p class="tagline">Static mock-up — matches live status page layout. Hover <span class="help-icon" style="cursor:default">?</span> on controls for help.</p>
+      </div>
+      <button class="btn" id="themeBtn" type="button">Theme</button>
+    </div>
 
-  <p class="subtle">
-    JSON: <a href="#"><code>/status.json</code></a> • Logs JSON: <a href="#"><code>/logs.json</code></a> • Controls JSON: <a href="#"><code>/control.json</code></a>
-  </p>
+    <div class="section-title">Overview</div>
+    <div class="card">
+      <div class="row"><div>Uptime</div><div><code>5h 07m 12s</code></div></div>
+      <div class="row"><div>Mode</div><div><code>persistent</code></div></div>
+      <div class="row"><div>RTI clients</div><div><code>1</code></div></div>
+      <div class="row"><div>Configured TX</div><div><code>10</code></div></div>
+      <div class="row"><div>Configured RX</div><div><code>40</code></div></div>
+      <div class="row"><div>AMX connections (persistent)</div><div><code>38/40</code></div></div>
+      <div class="row"><div>AMX set retries</div><div><code>attempts=3</code> <code>backoff=200-1200ms</code></div></div>
+    </div>
 
-  <h3>Controls</h3>
-  <p class="subtle">Runtime settings. Hover <span class="help-icon" style="cursor:default">?</span> for details (live page uses browser tooltips).</p>
-  <div class="card">
-    <div class="row">
-      <div>
-        <b>AMX verify after switch</b>
-        <span class="help-icon" title="When ON, after each route the translator queries each decoder STREAM. Mismatches notify RTI via rti_notify only.">?</span>
-        <div class="ctrl-desc">Post-switch AMX STREAM check.</div>
-      </div>
-      <div><code>true</code> <a href="#" title="Turn verify on/off"><code>toggle</code></a></div>
+    <div class="links-bar">
+      <span>API:</span>
+      <a href="#"><code>/status.json</code></a>
+      <a href="#"><code>/logs.json</code></a>
+      <a href="#"><code>/control.json</code></a>
     </div>
-    <div class="row">
-      <div>
-        <b>AMX verify timeout</b>
-        <span class="help-icon" title="Milliseconds to wait per decoder during verify.">?</span>
-        <div class="ctrl-desc">Timeout per decoder for verify.</div>
-      </div>
-      <div>
-        <code>800ms</code>
-        <input class="btn" style="width:96px; padding:6px 8px;" type="number" min="100" max="5000" step="50" value="800"/>
-        <button class="btn" type="button" title="Apply new timeout">Apply</button>
-      </div>
-    </div>
-    <div class="row">
-      <div>
-        <b>RTI status heartbeat</b>
-        <span class="help-icon" title="Periodic DTSTATUS UDP to your rti_status target.">?</span>
-        <div class="ctrl-desc">Enable or pause status heartbeat.</div>
-      </div>
-      <div><code>false</code> <a href="#" title="Turn heartbeat on/off"><code>toggle</code></a></div>
-    </div>
-    <div class="row">
-      <div>
-        <b>AMX self-test</b>
-        <span class="help-icon" title="TCP connect test to every decoder; returns JSON.">?</span>
-        <div class="ctrl-desc">Decoder reachability check.</div>
-      </div>
-      <div><a href="#" title="Run test"><code>run now</code></a></div>
-    </div>
-    <div class="row">
-      <div>
-        <b>Reboot host</b>
-        <span class="help-icon" title="Full Linux reboot (systemctl reboot).">?</span>
-        <div class="ctrl-desc">Reboot entire server.</div>
-      </div>
-      <div><a href="#" title="Reboot"><code>reboot now</code></a></div>
-    </div>
-  </div>
 
-  <h3>Matrix (set by RTI)</h3>
-  <p class="subtle">This table reflects the last routing commands received from RTI (emulated WyreStorm matrix state).</p>
-  <table style="border-collapse: collapse; width: 100%; max-width: 720px;">
-    <thead><tr><th style="text-align:left; padding:8px 10px;">RX (Output)</th><th style="text-align:left; padding:8px 10px;">TX (Input)</th><th style="text-align:left; padding:8px 10px;">Status</th></tr></thead>
-    <tbody>
-      <tr><td style="padding:8px 10px;"><code>OUT1-TV1</code></td><td style="padding:8px 10px;"><code>IN3-BOX3</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT2-TV2</code></td><td style="padding:8px 10px;"><code>IN5-BOX5</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT3-TV3</code></td><td style="padding:8px 10px;"><code>IN5-BOX5</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT4-TV4</code></td><td style="padding:8px 10px;"><code>IN1-BOX1</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT5-TV5</code></td><td style="padding:8px 10px;"><code>IN1-BOX1</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT6-TV6</code></td><td style="padding:8px 10px;"><code>IN2-BOX2</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT7-TV7</code></td><td style="padding:8px 10px;"><code>IN2-BOX2</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT8-TV8</code></td><td style="padding:8px 10px;"><code>IN10-BOX10</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT9-TV9</code></td><td style="padding:8px 10px;"><code>NULL</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT10-TV10</code></td><td style="padding:8px 10px;"><code>IN4-BOX4</code></td><td style="padding:8px 10px; color:#118a2a;"><b>ONLINE</b></td></tr>
-      <tr><td style="padding:8px 10px;"><code>OUT14-TV14</code></td><td style="padding:8px 10px;"><code>IN4-BOX4</code></td><td style="padding:8px 10px; color:#cc2f2f;"><b>OFFLINE</b></td></tr>
-    </tbody>
-  </table>
+    <div class="section-title">Controls</div>
+    <p class="subtle">Runtime settings. Details are only in the <strong>?</strong> tooltips.</p>
+    <div class="card">
+      <div class="row">
+        <div><b>AMX verify after switch</b><span class="help-icon" title="When ON, after each route the translator queries each decoder STREAM. Mismatches notify RTI via rti_notify only.">?</span></div>
+        <div class="ctrl-actions"><code>true</code> <a href="#">Toggle</a></div>
+      </div>
+      <div class="row">
+        <div><b>AMX verify timeout</b><span class="help-icon" title="Milliseconds to wait per decoder during verify.">?</span></div>
+        <div class="ctrl-actions">
+          <code>800ms</code>
+          <input class="btn" style="width:100px; padding:6px 10px;" type="number" min="100" max="5000" step="50" value="800"/>
+          <button class="btn btn-primary" type="button">Apply</button>
+        </div>
+      </div>
+      <div class="row">
+        <div><b>RTI status heartbeat</b><span class="help-icon" title="Periodic DTSTATUS UDP to your rti_status target.">?</span></div>
+        <div class="ctrl-actions"><code>false</code> <a href="#">Toggle</a></div>
+      </div>
+      <div class="row">
+        <div><b>AMX self-test</b><span class="help-icon" title="TCP connect test to every decoder; returns JSON.">?</span></div>
+        <div class="ctrl-actions"><a href="#">Run now</a></div>
+      </div>
+      <div class="row">
+        <div><b>Reboot host</b><span class="help-icon" title="Full Linux reboot (systemctl reboot).">?</span></div>
+        <div class="ctrl-actions"><a href="#">Reboot</a></div>
+      </div>
+    </div>
 
-  <h3>Recent logs</h3>
-  <pre>2026-03-17 10:12:01 INFO drivertranslator: HTTP status listening on ('192.168.1.100', 8080)
+    <div class="section-title">Matrix</div>
+    <p class="subtle">Emulated WyreStorm routing from RTI (<code>NULL</code> = no source). Status = last AMX send result per RX.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>RX (Output)</th><th>TX (Input)</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td><code>OUT1-TV1</code></td><td><code>IN3-BOX3</code></td><td class="ok">ONLINE</td></tr>
+          <tr><td><code>OUT2-TV2</code></td><td><code>IN5-BOX5</code></td><td class="ok">ONLINE</td></tr>
+          <tr><td><code>OUT3-TV3</code></td><td><code>IN5-BOX5</code></td><td class="ok">ONLINE</td></tr>
+          <tr><td><code>OUT4-TV4</code></td><td><code>IN1-BOX1</code></td><td class="ok">ONLINE</td></tr>
+          <tr><td><code>OUT5-TV5</code></td><td><code>IN1-BOX1</code></td><td class="ok">ONLINE</td></tr>
+          <tr><td><code>OUT6-TV6</code></td><td><code>IN2-BOX2</code></td><td class="ok">ONLINE</td></tr>
+          <tr><td><code>OUT7-TV7</code></td><td><code>IN2-BOX2</code></td><td class="ok">ONLINE</td></tr>
+          <tr><td><code>OUT8-TV8</code></td><td><code>IN10-BOX10</code></td><td class="ok">ONLINE</td></tr>
+          <tr><td><code>OUT9-TV9</code></td><td><code>NULL</code></td><td class="ok">ONLINE</td></tr>
+          <tr><td><code>OUT10-TV10</code></td><td><code>IN4-BOX4</code></td><td class="ok">ONLINE</td></tr>
+          <tr><td><code>OUT14-TV14</code></td><td><code>IN4-BOX4</code></td><td class="bad">OFFLINE</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section-title">Recent logs</div>
+    <pre>2026-03-17 10:12:01 INFO drivertranslator: HTTP status listening on ('192.168.1.100', 8080)
 2026-03-17 10:12:05 INFO drivertranslator: RTI connected from ('192.168.1.50', 49822)
 2026-03-17 10:12:07 INFO drivertranslator: RTI -> matrix set IN3-BOX3 OUT1-TV1
 2026-03-17 10:12:07 INFO drivertranslator: AMX -> 192.168.10.101:50002 b'set:3\r'
@@ -207,9 +331,8 @@
 2026-03-17 10:13:12 INFO drivertranslator: (rti_notify) DT: ERROR AMX route failed: Failed to connect to AMX decoder 192.168.10.140:50002: [Errno 113] No route to host
 </pre>
 
-  <p class="subtle">
-    This is a static mock-up file for preview only.
-  </p>
+    <p class="subtle">This file is for preview only; open in a browser to compare with the live page.</p>
+  </div>
 
   <script>
     (function () {
@@ -238,4 +361,3 @@
   </script>
 </body>
 </html>
-

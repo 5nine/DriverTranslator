@@ -812,191 +812,329 @@ async def _handle_http_client(
   <style>
     :root {{
       color-scheme: light dark;
-      --bg: #ffffff;
-      --fg: #111111;
-      --muted: #666666;
+      --accent: #2563eb;
+      --accent-soft: rgba(37, 99, 235, 0.12);
+      --bg: #f4f6f9;
+      --fg: #0f172a;
+      --muted: #64748b;
       --card: #ffffff;
-      --border: #dddddd;
-      --row: #f0f0f0;
-      --code-bg: #f6f6f6;
-      --code-fg: #111111;
-      --log-bg: #0b1020;
-      --log-fg: #e6e6e6;
-      --link: #0b5fff;
+      --border: #e2e8f0;
+      --row: #f1f5f9;
+      --code-bg: #f1f5f9;
+      --code-fg: #0f172a;
+      --log-bg: #0f172a;
+      --log-fg: #e2e8f0;
+      --link: #2563eb;
+      --shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 4px 14px rgba(15, 23, 42, 0.04);
     }}
 
     @media (prefers-color-scheme: dark) {{
       :root {{
-        --bg: #0b0d12;
-        --fg: #e9edf1;
-        --muted: #a9b1ba;
-        --card: #111521;
-        --border: #223046;
-        --row: #1a2233;
-        --code-bg: #0f1420;
-        --code-fg: #e9edf1;
-        --log-bg: #0b1020;
-        --log-fg: #e6e6e6;
-        --link: #8ab4ff;
+        --accent: #60a5fa;
+        --accent-soft: rgba(96, 165, 250, 0.12);
+        --bg: #0c0f14;
+        --fg: #f1f5f9;
+        --muted: #94a3b8;
+        --card: #141a24;
+        --border: #273449;
+        --row: #1a2332;
+        --code-bg: #1e293b;
+        --code-fg: #e2e8f0;
+        --log-bg: #0a0e14;
+        --log-fg: #cbd5e1;
+        --link: #93c5fd;
+        --shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
       }}
     }}
 
     [data-theme="light"] {{
-      --bg: #ffffff;
-      --fg: #111111;
-      --muted: #666666;
+      --accent: #2563eb;
+      --accent-soft: rgba(37, 99, 235, 0.12);
+      --bg: #f4f6f9;
+      --fg: #0f172a;
+      --muted: #64748b;
       --card: #ffffff;
-      --border: #dddddd;
-      --row: #f0f0f0;
-      --code-bg: #f6f6f6;
-      --code-fg: #111111;
-      --log-bg: #0b1020;
-      --log-fg: #e6e6e6;
-      --link: #0b5fff;
+      --border: #e2e8f0;
+      --row: #f1f5f9;
+      --code-bg: #f1f5f9;
+      --code-fg: #0f172a;
+      --log-bg: #0f172a;
+      --log-fg: #e2e8f0;
+      --link: #2563eb;
+      --shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 4px 14px rgba(15, 23, 42, 0.04);
     }}
 
     [data-theme="dark"] {{
-      --bg: #0b0d12;
-      --fg: #e9edf1;
-      --muted: #a9b1ba;
-      --card: #111521;
-      --border: #223046;
-      --row: #1a2233;
-      --code-bg: #0f1420;
-      --code-fg: #e9edf1;
-      --log-bg: #0b1020;
-      --log-fg: #e6e6e6;
-      --link: #8ab4ff;
+      --accent: #60a5fa;
+      --accent-soft: rgba(96, 165, 250, 0.12);
+      --bg: #0c0f14;
+      --fg: #f1f5f9;
+      --muted: #94a3b8;
+      --card: #141a24;
+      --border: #273449;
+      --row: #1a2332;
+      --code-bg: #1e293b;
+      --code-fg: #e2e8f0;
+      --log-bg: #0a0e14;
+      --log-fg: #cbd5e1;
+      --link: #93c5fd;
+      --shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
     }}
 
+    * {{ box-sizing: border-box; }}
     body {{
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      margin: 24px;
+      font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+      margin: 0;
+      min-height: 100vh;
       background: var(--bg);
       color: var(--fg);
+      line-height: 1.5;
     }}
-
-    a {{ color: var(--link); }}
+    .wrap {{
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 28px 20px 48px;
+    }}
+    a {{ color: var(--link); text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
 
     .topbar {{
-      max-width: 720px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 12px;
-      margin-bottom: 12px;
+      gap: 16px;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
     }}
+    .brand {{
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }}
+    .brand h1 {{
+      margin: 0;
+      font-size: 1.45rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }}
+    .brand span {{ font-size: 0.8rem; color: var(--muted); }}
 
     .btn {{
       border: 1px solid var(--border);
       background: var(--card);
       color: var(--fg);
-      padding: 6px 10px;
-      border-radius: 8px;
+      padding: 8px 14px;
+      border-radius: 10px;
       cursor: pointer;
       font-size: 13px;
+      font-weight: 500;
+      box-shadow: var(--shadow);
+      transition: transform 0.12s ease, border-color 0.12s;
+    }}
+    .btn:hover {{ border-color: var(--accent); }}
+    .btn-primary {{
+      background: var(--accent);
+      color: #fff;
+      border-color: transparent;
+    }}
+    .btn-primary:hover {{ filter: brightness(1.06); }}
+
+    .card {{
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px 20px;
+      margin-bottom: 20px;
+      box-shadow: var(--shadow);
+    }}
+    .card .row {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }}
+    .card .row:last-child {{ border-bottom: 0; }}
+
+    .section-title {{
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: 28px 0 10px 0;
+      border-left: 3px solid var(--accent);
+      padding-left: 10px;
+    }}
+    .section-title:first-of-type {{ margin-top: 0; }}
+
+    code {{
+      background: var(--code-bg);
+      color: var(--code-fg);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 0.88em;
+    }}
+    .ok {{ color: #16a34a; font-weight: 600; }}
+    .bad {{ color: #dc2626; font-weight: 600; }}
+
+    .links-bar {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }}
+    .links-bar a {{ font-weight: 500; }}
+
+    pre {{
+      white-space: pre-wrap;
+      background: var(--log-bg);
+      color: var(--log-fg);
+      padding: 16px 18px;
+      border-radius: 12px;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.45;
+      border: 1px solid var(--border);
     }}
 
-    .card {{ max-width: 720px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }}
-    .row {{ display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--row); }}
-    .row:last-child {{ border-bottom: 0; }}
-    code {{ background: var(--code-bg); color: var(--code-fg); padding: 2px 6px; border-radius: 6px; }}
-    .ok {{ color: #118a2a; }}
-    .bad {{ color: #cc2f2f; }}
-    pre {{ white-space: pre-wrap; background: var(--log-bg); color: var(--log-fg); padding: 12px; border-radius: 10px; overflow-x: auto; }}
-    table {{ border-collapse: collapse; width: 100%; max-width: 720px; }}
-    th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--row); }}
-    .subtle {{ color: var(--muted); font-size: 12px; }}
-    .help-icon {{
-      display: inline-flex; align-items: center; justify-content: center;
-      width: 1.1em; height: 1.1em; margin-left: 6px; font-size: 11px; font-weight: 700;
-      border: 1px solid var(--border); border-radius: 50%; color: var(--muted); cursor: help;
-      vertical-align: middle; line-height: 1;
+    .table-wrap {{
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      margin-bottom: 8px;
     }}
-    .ctrl-desc {{ color: var(--muted); font-size: 12px; font-weight: normal; margin-top: 4px; max-width: 420px; }}
+    table {{ border-collapse: collapse; width: 100%; background: var(--card); }}
+    thead th {{
+      background: var(--accent-soft);
+      color: var(--fg);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 600;
+      padding: 12px 14px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }}
+    tbody tr {{ transition: background 0.1s; }}
+    tbody tr:nth-child(even) {{ background: var(--row); }}
+    tbody tr:hover {{ background: var(--accent-soft); }}
+    tbody td {{ padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 14px; }}
+    tbody tr:last-child td {{ border-bottom: 0; }}
+
+    .subtle {{ color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0 0 14px 0; max-width: 720px; }}
+
+    .help-icon {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      margin-left: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      color: var(--muted);
+      background: var(--row);
+      cursor: help;
+      vertical-align: middle;
+      line-height: 1;
+    }}
+    .help-icon:hover {{ color: var(--accent); border-color: var(--accent); }}
+
+    .ctrl-actions {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
+    .ctrl-actions a {{
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: 8px;
+      background: var(--accent-soft);
+      color: var(--link);
+      font-weight: 600;
+      font-size: 13px;
+    }}
+    .ctrl-actions a:hover {{ text-decoration: none; filter: brightness(0.95); }}
   </style>
 </head>
 <body>
+  <div class="wrap">
   <div class="topbar">
-    <h2 style="margin:0;">DriverTranslator Status</h2>
-    <button class="btn" id="themeBtn" type="button">Toggle theme</button>
+    <div class="brand">
+      <h1>DriverTranslator</h1>
+      <span>Status &amp; controls</span>
+    </div>
+    <button class="btn" id="themeBtn" type="button">Theme</button>
   </div>
+
+  <div class="section-title">Overview</div>
   <div class="card">
     <div class="row"><div>Uptime</div><div><code>{uptime_h}</code></div></div>
     <div class="row"><div>Mode</div><div><code>{snapshot['mode']}</code></div></div>
     <div class="row"><div>RTI clients</div><div><code>{snapshot['rti_clients']}</code></div></div>
     <div class="row"><div>Configured TX</div><div><code>{snapshot['tx_configured']}</code></div></div>
     <div class="row"><div>Configured RX</div><div><code>{snapshot['rx_configured']}</code></div></div>
-    <div class="row"><div>AMX connections (persistent)</div><div><code>{amx_conn}</code></div></div>
+    <div class="row"><div>AMX connections</div><div><code>{amx_conn}</code></div></div>
   </div>
-  <p class="subtle">JSON: <a href="/status.json"><code>/status.json</code></a> • Logs JSON: <a href="/logs.json"><code>/logs.json</code></a> • Controls JSON: <a href="/control.json"><code>/control.json</code></a></p>
-  <h3>Controls</h3>
-  <p class="subtle">Runtime settings (no config file edit). Hover the <span class="help-icon" style="cursor:default">?</span> icons for details. Links may prompt your browser again for the page password.</p>
+
+  <div class="links-bar">
+    <a href="/status.json">status.json</a>
+    <a href="/logs.json">logs.json</a>
+    <a href="/control.json">control.json</a>
+  </div>
+
+  <div class="section-title">Controls</div>
+  <p class="subtle">Runtime only (no config file). Hover <span class="help-icon" style="cursor:default" title="Each control has a ? with full help.">?</span> next to a label for help. Control links may ask for the page password again.</p>
   <div class="card">
     <div class="row">
-      <div>
-        <b>AMX verify after switch</b>
-        <span class="help-icon" title="When ON, after each route the translator asks each affected decoder for STREAM via AMX. Mismatches send rti_notify only; RTI still gets an immediate matrix ack.">?</span>
-        <div class="ctrl-desc">Post-switch AMX STREAM check (errors go to rti_notify only).</div>
-      </div>
-      <div>
+      <div><b>AMX verify after switch</b><span class="help-icon" title="When ON, after each route the translator asks each affected decoder for STREAM via AMX. Mismatches send rti_notify only; RTI still gets an immediate matrix ack.">?</span></div>
+      <div class="ctrl-actions">
         <code>{str(rt['amx_verify_after_set']).lower()}</code>
-        <a href="/control/set?key=amx_verify_after_set&value={'false' if rt['amx_verify_after_set'] else 'true'}{ctl_qs}"
-           title="Turn verify-after-switch on or off">toggle</a>
+        <a href="/control/set?key=amx_verify_after_set&value={'false' if rt['amx_verify_after_set'] else 'true'}{ctl_qs}">Toggle</a>
       </div>
     </div>
     <div class="row">
-      <div>
-        <b>AMX verify timeout</b>
-        <span class="help-icon" title="How long to wait (ms) for each decoder status read during verify. Lower is snappier; raise if decoders are slow or the network is busy.">?</span>
-        <div class="ctrl-desc">Milliseconds to wait per decoder when verifying STREAM.</div>
-      </div>
-      <div>
-        <code>{rt['amx_verify_timeout_ms']}ms</code>
-        <input id="verifyTo" class="btn" style="width:96px; padding:6px 8px;" type="number" min="100" max="5000" step="50" value="{rt['amx_verify_timeout_ms']}"
-               title="New timeout in milliseconds"/>
-        <button id="applyVerifyTo" class="btn" type="button" title="Apply the timeout above">Apply</button>
+      <div><b>AMX verify timeout</b><span class="help-icon" title="How long to wait (ms) for each decoder status read during verify. Lower is snappier; raise if decoders are slow or the network is busy.">?</span></div>
+      <div class="ctrl-actions">
+        <code>{rt['amx_verify_timeout_ms']} ms</code>
+        <input id="verifyTo" class="btn" style="width:88px; padding:6px 8px;" type="number" min="100" max="5000" step="50" value="{rt['amx_verify_timeout_ms']}"/>
+        <button id="applyVerifyTo" class="btn btn-primary" type="button">Apply</button>
       </div>
     </div>
     <div class="row">
-      <div>
-        <b>RTI status heartbeat</b>
-        <span class="help-icon" title="When ON, DriverTranslator sends periodic DTSTATUS lines to your rti_status UDP target (if enabled in config). Takes effect without restarting the service.">?</span>
-        <div class="ctrl-desc">Enable or pause periodic status UDP to RTI.</div>
-      </div>
-      <div>
+      <div><b>RTI status heartbeat</b><span class="help-icon" title="When ON, DriverTranslator sends periodic DTSTATUS lines to your rti_status UDP target (if enabled in config). No service restart needed.">?</span></div>
+      <div class="ctrl-actions">
         <code>{str(rt['rti_status_enabled']).lower()}</code>
-        <a href="/control/set?key=rti_status_enabled&value={'false' if rt['rti_status_enabled'] else 'true'}{ctl_qs}"
-           title="Turn heartbeat on or off">toggle</a>
+        <a href="/control/set?key=rti_status_enabled&value={'false' if rt['rti_status_enabled'] else 'true'}{ctl_qs}">Toggle</a>
       </div>
     </div>
     <div class="row">
-      <div>
-        <b>AMX self-test</b>
-        <span class="help-icon" title="Tries a short TCP connect to every configured decoder IP (port 50002). Returns JSON: how many reachable. In dry-run mode all are reported reachable without connecting.">?</span>
-        <div class="ctrl-desc">Connectivity check to all decoders; shows JSON result.</div>
-      </div>
-      <div><a href="/control/selftest{('?' + ctl_qs[1:]) if ctl_qs else ''}" title="Run connectivity test now">run now</a></div>
+      <div><b>AMX self-test</b><span class="help-icon" title="Short TCP connect to every configured decoder IP (port 50002). Returns JSON with reachability. In dry-run mode all decoders count as reachable without connecting.">?</span></div>
+      <div class="ctrl-actions"><a href="/control/selftest{('?' + ctl_qs[1:]) if ctl_qs else ''}">Run now</a></div>
     </div>
     <div class="row">
-      <div>
-        <b>Reboot host</b>
-        <span class="help-icon" title="Reboots this Linux machine (systemctl reboot). SSH and the webpage will drop until the system is back. Use for maintenance after updates.">?</span>
-        <div class="ctrl-desc">Full system reboot (not just the service).</div>
-      </div>
-      <div><a href="/control/reboot{('?' + ctl_qs[1:]) if ctl_qs else ''}" title="Reboot this server">reboot now</a></div>
+      <div><b>Reboot host</b><span class="help-icon" title="Reboots this Linux machine (systemctl reboot). SSH and this page drop until the system is back.">?</span></div>
+      <div class="ctrl-actions"><a href="/control/reboot{('?' + ctl_qs[1:]) if ctl_qs else ''}">Reboot</a></div>
     </div>
   </div>
-  <h3>Matrix (set by RTI)</h3>
-  <p class="subtle">Shows the current emulated WyreStorm matrix state (RX → TX) based on the last commands received from RTI. <code>NULL</code> means “no source assigned”.</p>
+
+  <div class="section-title">Matrix</div>
+  <p class="subtle">Emulated WyreStorm routing from RTI (<code>NULL</code> = no source). Status = last AMX send result per RX.</p>
+  <div class="table-wrap">
   <table>
     <thead><tr><th>RX (Output)</th><th>TX (Input)</th><th>Status</th></tr></thead>
     <tbody>
       {route_html}
     </tbody>
   </table>
-  <h3>Recent logs</h3>
+  </div>
+
+  <div class="section-title">Recent logs</div>
   <pre>{log_lines}</pre>
+  </div>
   <script>
     (function () {{
       const btn = document.getElementById('themeBtn');
