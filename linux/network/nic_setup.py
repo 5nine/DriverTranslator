@@ -88,10 +88,9 @@ def _validate_ipv4(ip: str) -> None:
 def _render_netplan_yaml(
     *,
     control: Tuple[Nic, Dict[str, Any]],
-    avoip: Tuple[Nic, Dict[str, Any]],
+    avoip: Optional[Tuple[Nic, Dict[str, Any]]],
 ) -> str:
     (ctrl_nic, ctrl_cfg) = control
-    (av_nic, av_cfg) = avoip
 
     def iface_block(nic: Nic, cfg: Dict[str, Any]) -> List[str]:
         ipv4 = cfg["ipv4"]
@@ -123,7 +122,9 @@ def _render_netplan_yaml(
     lines.append("  renderer: networkd")
     lines.append("  ethernets:")
     lines += iface_block(ctrl_nic, ctrl_cfg)
-    lines += iface_block(av_nic, av_cfg)
+    if avoip is not None:
+        (av_nic, av_cfg) = avoip
+        lines += iface_block(av_nic, av_cfg)
     lines.append("")
     return "\n".join(lines)
 
@@ -160,13 +161,17 @@ def main() -> int:
     nics = list_nics()
 
     ctrl_match = cfg.get("control", {}).get("match", {})
-    av_match = cfg.get("avoip", {}).get("match", {})
     ctrl = _match_nic(nics, ctrl_match)
-    av = _match_nic(nics, av_match)
+    avoip_cfg = cfg.get("avoip")
+    avoip: Optional[Tuple[Nic, Dict[str, Any]]] = None
+    if isinstance(avoip_cfg, dict):
+        av_match = avoip_cfg.get("match", {})
+        av = _match_nic(nics, av_match)
+        avoip = (av, avoip_cfg)
 
     yaml_text = _render_netplan_yaml(
         control=(ctrl, cfg["control"]),
-        avoip=(av, cfg["avoip"]),
+        avoip=avoip,
     )
 
     if args.cmd == "generate-netplan":

@@ -4,10 +4,11 @@ import contextlib
 import collections
 import json
 import logging
+import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple
 
 
 LOG = logging.getLogger("drivertranslator")
@@ -62,6 +63,13 @@ def _as_int(v: Any, *, default: int) -> int:
 def _bind_addr(v: Any) -> Optional[str]:
     if v is None:
         return None
+
+
+def _opt_str(v: Any) -> Optional[str]:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
     s = str(v).strip()
     return s or None
 
@@ -131,6 +139,9 @@ class Config:
     amx_verify_timeout_ms: int
     amx_set_queue_limit: int
     amx_self_test_on_start: bool
+    amx_set_retry_attempts: int
+    amx_set_retry_backoff_initial_ms: int
+    amx_set_retry_backoff_max_ms: int
     rti_notify_enabled: bool
     rti_notify_protocol: str
     rti_notify_host: Optional[str]
@@ -148,6 +159,7 @@ class Config:
     http_status_bind: str
     http_status_port: int
     http_status_log_lines: int
+    http_status_control_token: Optional[str]
 
 
 def load_config(path: str) -> Config:
@@ -227,6 +239,9 @@ def load_config(path: str) -> Config:
         amx_verify_timeout_ms=_clamp_int(amx.get("verify_timeout_ms"), default=800, min_v=100, max_v=5000),
         amx_set_queue_limit=_clamp_int(amx.get("set_queue_limit"), default=1, min_v=1, max_v=20),
         amx_self_test_on_start=_as_bool(amx.get("self_test_on_start"), default=True),
+        amx_set_retry_attempts=_clamp_int(amx.get("set_retry_attempts"), default=3, min_v=1, max_v=10),
+        amx_set_retry_backoff_initial_ms=_clamp_int(amx.get("set_retry_backoff_initial_ms"), default=200, min_v=0, max_v=5000),
+        amx_set_retry_backoff_max_ms=_clamp_int(amx.get("set_retry_backoff_max_ms"), default=1200, min_v=0, max_v=10000),
         rti_notify_enabled=_as_bool(rti_notify.get("enabled"), default=False),
         rti_notify_protocol=str(rti_notify.get("protocol", "udp")).strip().lower(),
         rti_notify_host=_bind_addr(rti_notify.get("host")),
@@ -246,7 +261,20 @@ def load_config(path: str) -> Config:
         http_status_bind=str(http_status.get("bind", "0.0.0.0")).strip() or "0.0.0.0",
         http_status_port=_as_int(http_status.get("port"), default=8080),
         http_status_log_lines=_as_int(http_status.get("log_lines"), default=200),
+        http_status_control_token=_opt_str(http_status.get("control_token")),
     )
+
+
+def _retry_delay_seconds(*, attempt_index: int, initial_ms: int, max_ms: int) -> float:
+    """
+    attempt_index: 1..N (1 is first retry delay)
+    Exponential backoff with small jitter.
+    """
+    if initial_ms <= 0 or max_ms <= 0:
+        return 0.0
+    base_ms = min(max_ms, int(initial_ms * (2 ** max(0, attempt_index - 1))))
+    jitter_ms = int(base_ms * random.uniform(0.0, 0.2))
+    return (base_ms + jitter_ms) / 1000.0
 
 
 def _validate_config(cfg: Config) -> None:
@@ -379,12 +407,14 @@ class StatusReporter:
         health: HealthState,
         amx: Any,
         cfg: Config,
+        runtime: RuntimeSettings,
     ) -> None:
         self._enabled = enabled and bool(host) and int(port) > 0 and interval_seconds > 0
         self._interval = max(1, int(interval_seconds))
         self._health = health
         self._amx = amx
         self._cfg = cfg
+        self._runtime = runtime
         self._notifier = RtiNotifier(
             enabled=self._enabled,
             protocol=protocol,
@@ -405,7 +435,9 @@ class StatusReporter:
     async def _loop(self) -> None:
         while True:
             await asyncio.sleep(self._interval)
-            await self._send_status()
+            # Can be disabled at runtime via web controls.
+            if self._runtime.rti_status_enabled:
+                await self._send_status()
 
     async def _send_status(self) -> None:
         mode = "dry_run" if self._cfg.amx_dry_run else ("persistent" if self._cfg.amx_persistent else "connect_close")
@@ -448,6 +480,37 @@ def _parse_amx_status(data: bytes) -> Dict[str, str]:
             k, v = line.split(":", 1)
             out[k.strip().upper()] = v.strip()
     return out
+
+
+async def _amx_self_test(*, cfg: Config, amx: Any) -> Dict[str, Any]:
+    """
+    Connectivity self-test: attempt to connect to each configured decoder IP.
+    Returns a summary suitable for web UI and/or problem notification.
+    """
+    if cfg.amx_dry_run:
+        return {"ok": len(cfg.rx_by_alias), "total": len(cfg.rx_by_alias), "unreachable": []}
+
+    ok = 0
+    unreachable: List[str] = []
+    local_addr = (cfg.amx_bind_address, 0) if cfg.amx_bind_address else None
+
+    for rx in cfg.rx_by_alias.values():
+        ip = rx.amx_decoder_ip
+        try:
+            _r, w = await _open_connection(
+                ip,
+                cfg.amx_decoder_port,
+                timeout=cfg.amx_connect_timeout_ms / 1000,
+                local_addr=local_addr,
+            )
+            w.close()
+            with contextlib.suppress(Exception):
+                await w.wait_closed()
+            ok += 1
+        except Exception:
+            unreachable.append(ip)
+
+    return {"ok": ok, "total": len(cfg.rx_by_alias), "unreachable": unreachable}
 
 
 def _http_response(status: str, content_type: str, body: bytes) -> bytes:
@@ -516,6 +579,7 @@ async def _handle_http_client(
     health: HealthState,
     amx: Any,
     state: NhdState,
+    runtime: RuntimeSettings,
     started_at: float,
 ) -> None:
     try:
@@ -533,6 +597,7 @@ async def _handle_http_client(
             return
 
         snapshot = _build_status_snapshot(cfg=cfg, health=health, amx=amx, started_at=started_at)
+        rt = await runtime.snapshot()
 
         if path in ("/status", "/status.json"):
             body = (json.dumps(snapshot, indent=2) + "\n").encode("utf-8")
@@ -540,10 +605,58 @@ async def _handle_http_client(
             return
 
         if path in ("/logs", "/logs.json"):
-            body = (json.dumps({"lines": _get_log_tail(cfg.http_status_log_lines)}, indent=2) + "\n").encode(
+            body = (json.dumps({"lines": _get_log_tail(rt["http_log_lines"])}, indent=2) + "\n").encode(
                 "utf-8"
             )
             writer.write(_http_response("200 OK", "application/json", body))
+            return
+
+        if path in ("/control", "/control.json"):
+            body = (json.dumps(rt, indent=2) + "\n").encode("utf-8")
+            writer.write(_http_response("200 OK", "application/json", body))
+            return
+
+        # Basic control endpoints (optional token).
+        # /control/set?key=<k>&value=<v>[&token=<t>]
+        # /control/selftest?[token=<t>]
+        if path.startswith("/control/"):
+            # very small query parsing (no urllib dependency)
+            qs = ""
+            if "?" in path:
+                qs = path.split("?", 1)[1]
+            params: Dict[str, str] = {}
+            for part in qs.split("&"):
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    params[k] = v
+
+            token = cfg.http_status_control_token
+            if token and params.get("token") != token:
+                writer.write(_http_response("403 Forbidden", "text/plain", b"forbidden"))
+                return
+
+            if path.startswith("/control/set"):
+                key = params.get("key", "")
+                value = params.get("value", "")
+                try:
+                    if value.lower() in ("true", "1", "yes", "y", "on", "false", "0", "no", "n", "off"):
+                        await runtime.set_bool(key, value.lower() in ("true", "1", "yes", "y", "on"))
+                    else:
+                        await runtime.set_int(key, int(value))
+                except Exception:
+                    writer.write(_http_response("400 Bad Request", "text/plain", b"bad control request"))
+                    return
+                body = (json.dumps(await runtime.snapshot(), indent=2) + "\n").encode("utf-8")
+                writer.write(_http_response("200 OK", "application/json", body))
+                return
+
+            if path.startswith("/control/selftest"):
+                res = await _amx_self_test(cfg=cfg, amx=amx)
+                body = (json.dumps(res, indent=2) + "\n").encode("utf-8")
+                writer.write(_http_response("200 OK", "application/json", body))
+                return
+
+            writer.write(_http_response("404 Not Found", "text/plain", b"not found"))
             return
 
         if path == "/" or path.startswith("/?"):
@@ -553,7 +666,7 @@ async def _handle_http_client(
                 if snapshot["amx_connected"] is not None
                 else "n/a"
             )
-            log_lines = "\n".join(_get_log_tail(cfg.http_status_log_lines))
+            log_lines = "\n".join(_get_log_tail(rt["http_log_lines"]))
             route_rows = []
             for rx_alias in sorted(cfg.rx_by_alias.keys()):
                 tx_alias = state.video.get(rx_alias) or "NULL"
@@ -678,10 +791,25 @@ async def _handle_http_client(
     <div class="row"><div>Configured RX</div><div><code>{snapshot['rx_configured']}</code></div></div>
     <div class="row"><div>AMX connections (persistent)</div><div><code>{amx_conn}</code></div></div>
   </div>
-  <p class="subtle">JSON: <a href="/status.json"><code>/status.json</code></a> • Logs JSON: <a href="/logs.json"><code>/logs.json</code></a></p>
-  <h3>Routing (video)</h3>
+  <p class="subtle">JSON: <a href="/status.json"><code>/status.json</code></a> • Logs JSON: <a href="/logs.json"><code>/logs.json</code></a> • Controls JSON: <a href="/control.json"><code>/control.json</code></a></p>
+  <h3>Controls</h3>
+  <div class="card">
+    <div class="row"><div>AMX verify after switch</div><div><code>{str(rt['amx_verify_after_set']).lower()}</code> <a href="/control/set?key=amx_verify_after_set&value={'false' if rt['amx_verify_after_set'] else 'true'}">toggle</a></div></div>
+    <div class="row">
+      <div>AMX verify timeout</div>
+      <div>
+        <code>{rt['amx_verify_timeout_ms']}ms</code>
+        <input id="verifyTo" class="btn" style="width:96px; padding:6px 8px;" type="number" min="100" max="5000" step="50" value="{rt['amx_verify_timeout_ms']}"/>
+        <button id="applyVerifyTo" class="btn" type="button">Apply</button>
+      </div>
+    </div>
+    <div class="row"><div>RTI status heartbeat</div><div><code>{str(rt['rti_status_enabled']).lower()}</code> <a href="/control/set?key=rti_status_enabled&value={'false' if rt['rti_status_enabled'] else 'true'}">toggle</a></div></div>
+    <div class="row"><div>AMX self-test</div><div><a href="/control/selftest">run now</a></div></div>
+  </div>
+  <h3>Matrix (set by RTI)</h3>
+  <p class="subtle">Shows the current emulated WyreStorm matrix state (RX → TX) based on the last commands received from RTI. <code>NULL</code> means “no source assigned”.</p>
   <table>
-    <thead><tr><th>Output (RX)</th><th>Input (TX)</th></tr></thead>
+    <thead><tr><th>RX (Output)</th><th>TX (Input)</th></tr></thead>
     <tbody>
       {route_html}
     </tbody>
@@ -711,6 +839,16 @@ async def _handle_http_client(
         apply(next);
         localStorage.setItem(key, next);
       }});
+
+      const verifyTo = document.getElementById('verifyTo');
+      const applyVerifyTo = document.getElementById('applyVerifyTo');
+      if (verifyTo && applyVerifyTo) {{
+        applyVerifyTo.addEventListener('click', () => {{
+          const v = String(parseInt(verifyTo.value || '800', 10));
+          // If control_token is configured, append &token=... manually in the address bar.
+          window.location.href = `/control/set?key=amx_verify_timeout_ms&value=${{encodeURIComponent(v)}}`;
+        }});
+      }}
     }})();
   </script>
 </body>
@@ -736,12 +874,18 @@ class AmxClient:
         connect_timeout_ms: int,
         command_timeout_ms: int,
         bind_address: Optional[str] = None,
+        set_retry_attempts: int = 1,
+        set_retry_backoff_initial_ms: int = 0,
+        set_retry_backoff_max_ms: int = 0,
     ):
         self._decoder_port = decoder_port
         self._connect_timeout = connect_timeout_ms / 1000
         self._command_timeout = command_timeout_ms / 1000
         self._local_addr: Optional[Tuple[str, int]] = (bind_address, 0) if bind_address else None
         self._locks: Dict[str, asyncio.Lock] = {}
+        self._set_retry_attempts = max(1, int(set_retry_attempts))
+        self._set_retry_backoff_initial_ms = max(0, int(set_retry_backoff_initial_ms))
+        self._set_retry_backoff_max_ms = max(0, int(set_retry_backoff_max_ms))
 
     def _lock_for(self, decoder_ip: str) -> asyncio.Lock:
         lock = self._locks.get(decoder_ip)
@@ -756,7 +900,7 @@ class AmxClient:
 
         # AMX doc: port 50002 allows single connection at a time.
         async with self._lock_for(decoder_ip):
-            await self._set_stream_locked(decoder_ip=decoder_ip, stream=stream)
+            await self._set_stream_locked_with_retry(decoder_ip=decoder_ip, stream=stream)
 
     async def verify_stream(self, *, decoder_ip: str, expected_stream: int, timeout_ms: int) -> bool:
         # Stateless client: open a connection and query status
@@ -814,6 +958,34 @@ class AmxClient:
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
 
+    async def _set_stream_locked_with_retry(self, *, decoder_ip: str, stream: int) -> None:
+        last_exc: Optional[BaseException] = None
+        for attempt in range(1, self._set_retry_attempts + 1):
+            try:
+                await self._set_stream_locked(decoder_ip=decoder_ip, stream=stream)
+                return
+            except Exception as e:
+                last_exc = e
+                if attempt >= self._set_retry_attempts:
+                    raise
+                delay = _retry_delay_seconds(
+                    attempt_index=attempt,
+                    initial_ms=self._set_retry_backoff_initial_ms,
+                    max_ms=self._set_retry_backoff_max_ms,
+                )
+                if delay > 0:
+                    LOG.warning(
+                        "AMX set_stream retry %d/%d for %s (after error: %s). Sleeping %.3fs",
+                        attempt,
+                        self._set_retry_attempts,
+                        decoder_ip,
+                        e,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+        if last_exc is not None:
+            raise last_exc
+
 
 class DryRunAmxClient:
     def __init__(self, *, decoder_port: int):
@@ -847,6 +1019,9 @@ class PersistentAmxClient:
         keepalive_seconds: int,
         bind_address: Optional[str] = None,
         set_queue_limit: int = 1,
+        set_retry_attempts: int = 1,
+        set_retry_backoff_initial_ms: int = 0,
+        set_retry_backoff_max_ms: int = 0,
     ):
         self._decoder_port = decoder_port
         self._connect_timeout = connect_timeout_ms / 1000
@@ -854,6 +1029,9 @@ class PersistentAmxClient:
         self._keepalive_seconds = max(0, int(keepalive_seconds))
         self._local_addr: Optional[Tuple[str, int]] = (bind_address, 0) if bind_address else None
         self._set_queue_limit: int = max(1, int(set_queue_limit))
+        self._set_retry_attempts: int = max(1, int(set_retry_attempts))
+        self._set_retry_backoff_initial_ms: int = max(0, int(set_retry_backoff_initial_ms))
+        self._set_retry_backoff_max_ms: int = max(0, int(set_retry_backoff_max_ms))
 
         self._workers: Dict[str, "_DecoderWorker"] = {}
         self._workers_lock = asyncio.Lock()
@@ -880,6 +1058,9 @@ class PersistentAmxClient:
                     command_timeout=self._command_timeout,
                     keepalive_seconds=self._keepalive_seconds,
                     local_addr=self._local_addr,
+                    set_retry_attempts=self._set_retry_attempts,
+                    set_retry_backoff_initial_ms=self._set_retry_backoff_initial_ms,
+                    set_retry_backoff_max_ms=self._set_retry_backoff_max_ms,
                 )
                 w.set_queue_limit(getattr(self, "_set_queue_limit", 1))
                 self._workers[decoder_ip] = w
@@ -910,6 +1091,9 @@ class _DecoderWorker:
         command_timeout: float,
         keepalive_seconds: int,
         local_addr: Optional[Tuple[str, int]] = None,
+        set_retry_attempts: int = 1,
+        set_retry_backoff_initial_ms: int = 0,
+        set_retry_backoff_max_ms: int = 0,
     ) -> None:
         self._decoder_ip = decoder_ip
         self._decoder_port = decoder_port
@@ -917,6 +1101,9 @@ class _DecoderWorker:
         self._command_timeout = command_timeout
         self._keepalive_seconds = keepalive_seconds
         self._local_addr = local_addr
+        self._set_retry_attempts = max(1, int(set_retry_attempts))
+        self._set_retry_backoff_initial_ms = max(0, int(set_retry_backoff_initial_ms))
+        self._set_retry_backoff_max_ms = max(0, int(set_retry_backoff_max_ms))
 
         self._cond = asyncio.Condition()
         self._set_pending: Optional[Tuple[int, asyncio.Future[None]]] = None
@@ -971,15 +1158,61 @@ class _DecoderWorker:
                 async with self._cond:
                     while self._set_pending is None:
                         await self._cond.wait()
+
+                # Don't clear pending immediately: we want "latest wins" to be able
+                # to supersede an in-flight send (including its retries).
+                async with self._cond:
+                    assert self._set_pending is not None
                     stream, fut = self._set_pending
-                    self._set_pending = None
-                try:
-                    await self._send_with_retry(f"set:{stream}\r".encode("ascii"))
-                    if not fut.done():
-                        fut.set_result(None)
-                except Exception as e:
-                    if not fut.done():
-                        fut.set_exception(e)
+
+                payload = f"set:{stream}\r".encode("ascii")
+                attempt = 1
+                while True:
+                    # If superseded, abandon this send immediately.
+                    async with self._cond:
+                        if self._set_pending != (stream, fut):
+                            break
+                    try:
+                        await self._send_raw(payload, log_label="AMX")
+                        async with self._cond:
+                            if self._set_pending == (stream, fut):
+                                self._set_pending = None
+                                if not fut.done():
+                                    fut.set_result(None)
+                        break
+                    except Exception as e:
+                        # If superseded, stop retrying.
+                        async with self._cond:
+                            if self._set_pending != (stream, fut):
+                                break
+                        if attempt >= self._set_retry_attempts:
+                            async with self._cond:
+                                if self._set_pending == (stream, fut):
+                                    self._set_pending = None
+                                    if not fut.done():
+                                        fut.set_exception(e)
+                            break
+
+                        # Reconnect then retry after backoff.
+                        with contextlib.suppress(Exception):
+                            await self._reconnect()
+
+                        delay = _retry_delay_seconds(
+                            attempt_index=attempt,
+                            initial_ms=self._set_retry_backoff_initial_ms,
+                            max_ms=self._set_retry_backoff_max_ms,
+                        )
+                        if delay > 0:
+                            LOG.warning(
+                                "AMX set_stream retry %d/%d for %s (after error: %s). Sleeping %.3fs",
+                                attempt,
+                                self._set_retry_attempts,
+                                self._decoder_ip,
+                                e,
+                                delay,
+                            )
+                            await asyncio.sleep(delay)
+                        attempt += 1
         finally:
             if keepalive_task is not None:
                 keepalive_task.cancel()
@@ -997,13 +1230,6 @@ class _DecoderWorker:
             except Exception:
                 # Connection might be down; worker main loop will reconnect on next command.
                 await self._reconnect()
-
-    async def _send_with_retry(self, payload: bytes) -> None:
-        try:
-            await self._send_raw(payload, log_label="AMX")
-        except Exception:
-            await self._reconnect()
-            await self._send_raw(payload, log_label="AMX(retry)")
 
     async def _send_raw(self, payload: bytes, *, log_label: str) -> None:
         await self._ensure_connected()
@@ -1114,6 +1340,46 @@ class HealthState:
         self.rti_clients: int = 0
 
 
+class RuntimeSettings:
+    def __init__(self, cfg: Config) -> None:
+        self._lock = asyncio.Lock()
+        self.amx_verify_after_set: bool = cfg.amx_verify_after_set
+        self.amx_verify_timeout_ms: int = cfg.amx_verify_timeout_ms
+        self.amx_self_test_on_start: bool = cfg.amx_self_test_on_start
+        self.rti_status_enabled: bool = cfg.rti_status_enabled
+        self.http_log_lines: int = cfg.http_status_log_lines
+
+    async def snapshot(self) -> Dict[str, Any]:
+        async with self._lock:
+            return {
+                "amx_verify_after_set": self.amx_verify_after_set,
+                "amx_verify_timeout_ms": self.amx_verify_timeout_ms,
+                "amx_self_test_on_start": self.amx_self_test_on_start,
+                "rti_status_enabled": self.rti_status_enabled,
+                "http_log_lines": self.http_log_lines,
+            }
+
+    async def set_bool(self, key: str, value: bool) -> None:
+        async with self._lock:
+            if key == "amx_verify_after_set":
+                self.amx_verify_after_set = value
+            elif key == "amx_self_test_on_start":
+                self.amx_self_test_on_start = value
+            elif key == "rti_status_enabled":
+                self.rti_status_enabled = value
+            else:
+                raise KeyError(key)
+
+    async def set_int(self, key: str, value: int) -> None:
+        async with self._lock:
+            if key == "amx_verify_timeout_ms":
+                self.amx_verify_timeout_ms = _clamp_int(value, default=800, min_v=100, max_v=5000)
+            elif key == "http_log_lines":
+                self.http_log_lines = _clamp_int(value, default=200, min_v=0, max_v=500)
+            else:
+                raise KeyError(key)
+
+
 def _lookup_tx(cfg: Config, token: str) -> Optional[Tx]:
     return cfg.tx_by_alias.get(token) or cfg.tx_by_hostname.get(token)
 
@@ -1199,13 +1465,13 @@ def _handle_config_get(cfg: Config, session: NhdCtlSession, cmd: str) -> List[st
     return ["unknown command"]
 
 
-async def _handle_matrix_set(cfg: Config, amx: Any, cmd: str) -> Tuple[bool, str]:
+async def _handle_matrix_set(cfg: Config, amx: Any, cmd: str) -> Tuple[bool, str, List[str]]:
     # cmd: "matrix set <TX> <RX1> <RX2> ... <RXn>"
     parts = cmd.split()
     if len(parts) < 4:
-        return False, "unknown command"
+        return False, "unknown command", []
     if parts[0].lower() != "matrix" or parts[1].lower() != "set":
-        return False, "unknown command"
+        return False, "unknown command", []
 
     tx_token = parts[2]
     rx_tokens = parts[3:]
@@ -1216,26 +1482,30 @@ async def _handle_matrix_set(cfg: Config, amx: Any, cmd: str) -> Tuple[bool, str
         if tx_token.upper() == "NULL":
             tx = None
         else:
-            return False, "unknown command"
+            return False, "unknown command", []
 
     rxs: List[Rx] = []
     for token in rx_tokens:
         rx = _lookup_rx(cfg, token)
         if rx is None:
-            return False, "unknown command"
+            return False, "unknown command", []
         rxs.append(rx)
 
+    failures: List[str] = []
     if tx is not None:
         # Fire AMX commands (one per decoder). Do it concurrently.
-        await asyncio.gather(
+        results = await asyncio.gather(
             *(amx.set_stream(decoder_ip=rx.amx_decoder_ip, stream=tx.amx_stream) for rx in rxs),
-            return_exceptions=False,
+            return_exceptions=True,
         )
+        for rx, res in zip(rxs, results):
+            if isinstance(res, BaseException):
+                failures.append(f"{rx.alias} ({rx.amx_decoder_ip}): {res}")
     else:
         LOG.info("AMX routing skipped: NULL assignment requested")
 
     # WyreStorm ack is a "command mirror"
-    return True, cmd
+    return True, cmd, failures
 
 
 def _format_matrix_info(
@@ -1307,6 +1577,7 @@ async def handle_client(
     state: NhdState,
     notifier: RtiNotifier,
     health: HealthState,
+    runtime: RuntimeSettings,
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
 ) -> None:
@@ -1337,8 +1608,11 @@ async def handle_client(
 
             # Handle known commands.
             if lower.startswith("matrix set "):
+                ok = False
+                resp = "unknown command"
+                failures: List[str] = []
                 try:
-                    ok, resp = await _handle_matrix_set(cfg, amx, line)
+                    ok, resp, failures = await _handle_matrix_set(cfg, amx, line)
                     if ok:
                         parts = line.split()
                         tx_token = parts[2]
@@ -1357,7 +1631,7 @@ async def handle_client(
                         state.set_all_media(tx_alias=tx_alias, rx_aliases=rx_aliases)
 
                         # Optional AMX verification (problems-only)
-                        if (not cfg.amx_dry_run) and cfg.amx_verify_after_set and tx_alias is not None:
+                        if (not cfg.amx_dry_run) and runtime.amx_verify_after_set and tx_alias is not None:
                             tx_obj2 = _lookup_tx(cfg, tx_alias)
                             expected = tx_obj2.amx_stream if tx_obj2 is not None else None
                             if expected:
@@ -1366,7 +1640,7 @@ async def handle_client(
                                     ok_v = await amx.verify_stream(
                                         decoder_ip=ip,
                                         expected_stream=expected,
-                                        timeout_ms=cfg.amx_verify_timeout_ms,
+                                        timeout_ms=runtime.amx_verify_timeout_ms,
                                     )
                                     if not ok_v:
                                         await notifier.problem(
@@ -1376,7 +1650,12 @@ async def handle_client(
                 except Exception as e:
                     LOG.exception("AMX routing failed")
                     await notifier.problem("amx.route", f"DT: ERROR AMX route failed: {e}")
-                    ok, resp = False, f"error {e}"
+                    # Keep RTI driver happy: still mirror the command as success.
+                    ok, resp = True, line
+
+                if failures:
+                    await notifier.problem("amx.route.partial", f"DT: ERROR AMX route failed on: {', '.join(failures[:3])}" + (" ..." if len(failures) > 3 else ""))
+
                 writer.write(_crlf(resp if ok else "unknown command"))
                 await writer.drain()
                 continue
@@ -1415,7 +1694,7 @@ async def handle_client(
                         if kind == "video" and tx_obj is not None:
                             try:
                                 # rx_aliases are already validated above; use direct map for safety.
-                                await asyncio.gather(
+                                results = await asyncio.gather(
                                     *(
                                         amx.set_stream(
                                             decoder_ip=cfg.rx_by_alias[a].amx_decoder_ip,
@@ -1423,17 +1702,27 @@ async def handle_client(
                                         )
                                         for a in rx_aliases
                                     ),
-                                    return_exceptions=False,
+                                    return_exceptions=True,
                                 )
+                                failures: List[str] = []
+                                for a, res in zip(rx_aliases, results):
+                                    if isinstance(res, BaseException):
+                                        failures.append(f"{a} ({cfg.rx_by_alias[a].amx_decoder_ip}): {res}")
+                                if failures:
+                                    await notifier.problem(
+                                        "amx.breakaway.video.partial",
+                                        f"DT: ERROR AMX breakaway video route failed on: {', '.join(failures[:3])}"
+                                        + (" ..." if len(failures) > 3 else ""),
+                                    )
 
-                                if (not cfg.amx_dry_run) and cfg.amx_verify_after_set:
+                                if (not cfg.amx_dry_run) and runtime.amx_verify_after_set:
                                     expected = tx_obj.amx_stream
                                     for rx_a in rx_aliases:
                                         ip = cfg.rx_by_alias[rx_a].amx_decoder_ip
                                         ok_v = await amx.verify_stream(
                                             decoder_ip=ip,
                                             expected_stream=expected,
-                                            timeout_ms=cfg.amx_verify_timeout_ms,
+                                            timeout_ms=runtime.amx_verify_timeout_ms,
                                         )
                                         if not ok_v:
                                             await notifier.problem(
@@ -1445,9 +1734,6 @@ async def handle_client(
                                 await notifier.problem(
                                     "amx.breakaway.video", f"DT: ERROR AMX breakaway video route failed: {e}"
                                 )
-                                writer.write(_crlf("unknown command"))
-                                await writer.drain()
-                                continue
 
                         writer.write(_crlf(line))  # command mirror ack
                         await writer.drain()
@@ -1587,6 +1873,9 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
             keepalive_seconds=cfg.amx_keepalive_seconds,
             bind_address=cfg.amx_bind_address,
             set_queue_limit=cfg.amx_set_queue_limit,
+            set_retry_attempts=cfg.amx_set_retry_attempts,
+            set_retry_backoff_initial_ms=cfg.amx_set_retry_backoff_initial_ms,
+            set_retry_backoff_max_ms=cfg.amx_set_retry_backoff_max_ms,
         )
     else:
         amx = AmxClient(
@@ -1594,10 +1883,14 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
             connect_timeout_ms=cfg.amx_connect_timeout_ms,
             command_timeout_ms=cfg.amx_command_timeout_ms,
             bind_address=cfg.amx_bind_address,
+            set_retry_attempts=cfg.amx_set_retry_attempts,
+            set_retry_backoff_initial_ms=cfg.amx_set_retry_backoff_initial_ms,
+            set_retry_backoff_max_ms=cfg.amx_set_retry_backoff_max_ms,
         )
 
     state = NhdState(cfg)
     health = HealthState()
+    runtime = RuntimeSettings(cfg)
 
     notifier = RtiNotifier(
         enabled=cfg.rti_notify_enabled,
@@ -1611,27 +1904,15 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
     await notifier.start()
 
     # Optional AMX self-test on startup (problems-only notification)
-    if cfg.amx_self_test_on_start and (not cfg.amx_dry_run):
-        ok = 0
-        fail: List[str] = []
-        local_addr = (cfg.amx_bind_address, 0) if cfg.amx_bind_address else None
-        for rx in cfg.rx_by_alias.values():
-            ip = rx.amx_decoder_ip
-            try:
-                _r, w = await _open_connection(
-                    ip, cfg.amx_decoder_port, timeout=cfg.amx_connect_timeout_ms / 1000, local_addr=local_addr
-                )
-                w.close()
-                with contextlib.suppress(Exception):
-                    await w.wait_closed()
-                ok += 1
-            except Exception:
-                fail.append(ip)
+    if cfg.amx_self_test_on_start:
+        res = await _amx_self_test(cfg=cfg, amx=amx)
+        fail = res.get("unreachable") or []
         if fail:
+            fail_l = list(fail)
             await notifier.problem(
                 "amx.selftest",
-                f"DT: ERROR AMX self-test: {ok}/{len(cfg.rx_by_alias)} reachable. Unreachable: {', '.join(fail[:5])}"
-                + (" ..." if len(fail) > 5 else ""),
+                f"DT: ERROR AMX self-test: {res.get('ok', 0)}/{res.get('total', 0)} reachable. Unreachable: {', '.join(fail_l[:5])}"
+                + (" ..." if len(fail_l) > 5 else ""),
             )
 
     status = StatusReporter(
@@ -1644,13 +1925,14 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
         health=health,
         amx=amx,
         cfg=cfg,
+        runtime=runtime,
     )
     await status.start()
 
     if cfg.http_status_enabled:
         http_server = await asyncio.start_server(
             lambda r, w: _handle_http_client(
-                r, w, cfg=cfg, health=health, amx=amx, state=state, started_at=started_at
+                r, w, cfg=cfg, health=health, amx=amx, state=state, runtime=runtime, started_at=started_at
             ),
             host=cfg.http_status_bind,
             port=cfg.http_status_port,
@@ -1659,7 +1941,7 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
         LOG.info("HTTP status listening on %s", addrs)
 
     server = await asyncio.start_server(
-        lambda r, w: handle_client(cfg, amx, state, notifier, health, r, w),
+        lambda r, w: handle_client(cfg, amx, state, notifier, health, runtime, r, w),
         host=listen,
         port=port,
     )

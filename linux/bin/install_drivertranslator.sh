@@ -27,6 +27,7 @@ Notes:
 - Run from inside a git clone of the project (or provide an existing repo-dir that is a clone).
 - Safe to re-run; it will (re)install dependencies, (re)copy the systemd unit, and restart the service.
  - Networking changes can drop your SSH session. Prefer running from the local console for first-time NIC setup.
+- Optional: enable tty1 auto-login + auto-start log view on boot.
 EOF
 }
 
@@ -51,8 +52,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$(id -u)" -ne 0 ]]; then
-  echo "Must run as root (use sudo)." >&2
-  exit 1
+  echo "Re-running with sudo (you may be prompted for password)..."
+  exec sudo -E bash "$0" "$@"
 fi
 
 echo "[1/8] Installing OS packages"
@@ -90,7 +91,7 @@ if [[ -f "$REPO_DIR/requirements.txt" ]]; then
   "$REPO_DIR/.venv/bin/pip" install -r "$REPO_DIR/requirements.txt"
 fi
 
-echo "[5/8] Optional: configure static IPs for both NICs"
+echo "[5/9] Optional: configure static IPs for NIC(s)"
 if [[ "$DO_NETWORK" -eq 1 ]]; then
   echo "Detected NICs:"
   python3 "$REPO_DIR/linux/network/nic_setup.py" list || true
@@ -109,11 +110,20 @@ if [[ "$DO_NETWORK" -eq 1 ]]; then
     read -r -p "  Gateway (e.g. 192.168.1.1): " CTRL_GW
     read -r -p "  DNS (comma separated, blank ok): " CTRL_DNS
 
-    echo "AVoIP NIC (AMX network):"
-    read -r -p "  Interface name (e.g. eth1): " AV_IF
-    read -r -p "  Static IPv4 address (e.g. 192.168.10.100): " AV_IP
-    read -r -p "  Prefix (e.g. 24): " AV_PREFIX
-    read -r -p "  Gateway (blank recommended if same subnet): " AV_GW
+    read -r -p "Configure a separate AVoIP NIC too? (y/N): " AV_ENABLE
+    AV_ENABLE="${AV_ENABLE:-N}"
+    if [[ "$AV_ENABLE" =~ ^[Yy]$ ]]; then
+      echo "AVoIP NIC (AMX network):"
+      read -r -p "  Interface name (e.g. eth1): " AV_IF
+      read -r -p "  Static IPv4 address (e.g. 192.168.10.100): " AV_IP
+      read -r -p "  Prefix (e.g. 24): " AV_PREFIX
+      read -r -p "  Gateway (blank recommended if same subnet): " AV_GW
+    else
+      AV_IF=""
+      AV_IP=""
+      AV_PREFIX=""
+      AV_GW=""
+    fi
 
     python3 - <<PY
 import json
@@ -121,6 +131,7 @@ from pathlib import Path
 
 ctrl_dns = [x.strip() for x in "${CTRL_DNS}".split(",") if x.strip()]
 av_gw = "${AV_GW}".strip() or None
+av_enabled = "${AV_ENABLE}".strip().lower() in ("y","yes","true","1","on")
 
 cfg = {
   "mode": "netplan",
@@ -128,11 +139,12 @@ cfg = {
     "match": { "interface": "${CTRL_IF}", "mac": None },
     "ipv4": { "address": "${CTRL_IP}", "prefix": int("${CTRL_PREFIX}"), "gateway": "${CTRL_GW}", "dns": ctrl_dns }
   },
-  "avoip": {
+}
+if av_enabled:
+  cfg["avoip"] = {
     "match": { "interface": "${AV_IF}", "mac": None },
     "ipv4": { "address": "${AV_IP}", "prefix": int("${AV_PREFIX}"), "gateway": av_gw, "dns": [] }
   }
-}
 
 Path("${NETWORK_CONFIG_PATH}").write_text(json.dumps(cfg, indent=2) + "\\n", encoding="utf-8")
 print("Wrote", "${NETWORK_CONFIG_PATH}")
@@ -143,7 +155,7 @@ PY
   fi
 fi
 
-echo "[6/8] Optional: generate config.json (TX/RX size + sequential IPs)"
+echo "[6/9] Optional: generate config.json (TX/RX size + sequential IPs)"
 if [[ "$DO_CONFIG" -eq 1 ]]; then
   if [[ ! -f "$CONFIG_PATH" ]]; then
     echo "No config found at $CONFIG_PATH. Creating one now."
@@ -285,12 +297,15 @@ cfg = {
     "verify_after_set": amx_verify,
     "verify_timeout_ms": amx_verify_to,
     "set_queue_limit": 1,
-    "self_test_on_start": amx_selftest
+    "self_test_on_start": amx_selftest,
+    "set_retry_attempts": 3,
+    "set_retry_backoff_initial_ms": 200,
+    "set_retry_backoff_max_ms": 1200
   },
   "server": { "send_startup_notify_endpoint_online": True },
   "rti_notify": { "enabled": rti_prob_enabled, "protocol": "udp", "host": rti_prob_host, "port": rti_prob_port, "bind_address": None, "min_interval_seconds": 10, "repeat_suppression_seconds": 300 },
   "rti_status": { "enabled": rti_stat_enabled, "protocol": "udp", "host": rti_stat_host, "port": rti_stat_port, "bind_address": None, "interval_seconds": rti_stat_int },
-  "http_status": { "enabled": http_enabled, "bind": http_bind, "port": http_port, "log_lines": http_log_lines }
+  "http_status": { "enabled": http_enabled, "bind": http_bind, "port": http_port, "log_lines": http_log_lines, "control_token": None }
 }
 
 Path("${CONFIG_PATH}").write_text(json.dumps(cfg, indent=2) + "\\n", encoding="utf-8")
@@ -302,14 +317,73 @@ PY
   fi
 fi
 
-echo "[7/8] Installing systemd unit"
+echo "[7/9] Installing systemd unit"
 install -m 0644 "$REPO_DIR/linux/systemd/drivertranslator.service" "/etc/systemd/system/$SERVICE_NAME"
 systemctl daemon-reload
 
-echo "[8/8] Enabling + restarting service"
+echo "[8/9] Enabling + restarting service"
 systemctl enable "$SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 systemctl --no-pager --full status "$SERVICE_NAME" || true
+
+echo "[9/9] Optional: auto-login on console + show logs"
+DEFAULT_USER="${SUDO_USER:-}"
+read -r -p "Enable tty1 auto-login and auto-start DriverTranslator logs at boot? (y/N): " AUTOLOG
+AUTOLOG="${AUTOLOG:-N}"
+if [[ "$AUTOLOG" =~ ^[Yy]$ ]]; then
+  read -r -p "Console username to auto-login (default: ${DEFAULT_USER}): " CONSOLE_USER
+  CONSOLE_USER="${CONSOLE_USER:-$DEFAULT_USER}"
+  if [[ -z "$CONSOLE_USER" ]]; then
+    echo "ERROR: No username provided for auto-login." >&2
+    exit 1
+  fi
+  if ! id "$CONSOLE_USER" >/dev/null 2>&1; then
+    echo "ERROR: User '$CONSOLE_USER' does not exist." >&2
+    exit 1
+  fi
+
+  echo "Configuring getty@tty1 auto-login for '$CONSOLE_USER'..."
+  mkdir -p /etc/systemd/system/getty@tty1.service.d
+  cat >/etc/systemd/system/getty@tty1.service.d/override.conf <<EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin ${CONSOLE_USER} --noclear %I \$TERM
+EOF
+
+  echo "Installing login hook to auto-follow logs on tty1..."
+  HOME_DIR="$(eval echo "~${CONSOLE_USER}")"
+  PROFILE_FILE="${HOME_DIR}/.profile"
+  MARKER_BEGIN="# >>> drivertranslator tty1 autolog (managed)"
+  MARKER_END="# <<< drivertranslator tty1 autolog (managed)"
+
+  # Remove any previous block we wrote
+  if [[ -f "$PROFILE_FILE" ]]; then
+    awk -v b="$MARKER_BEGIN" -v e="$MARKER_END" '
+      $0==b {skip=1; next}
+      $0==e {skip=0; next}
+      !skip {print}
+    ' "$PROFILE_FILE" >"${PROFILE_FILE}.tmp"
+    mv "${PROFILE_FILE}.tmp" "$PROFILE_FILE"
+  fi
+
+  cat >>"$PROFILE_FILE" <<'EOF'
+# >>> drivertranslator tty1 autolog (managed)
+if [ -z "${SSH_TTY:-}" ] && [ "${DT_CONSOLE_LOGS:-1}" = "1" ] && [ "$(tty 2>/dev/null || true)" = "/dev/tty1" ]; then
+  echo ""
+  echo "DriverTranslator logs (Ctrl+C to exit to shell)."
+  echo "Tip: set DT_CONSOLE_LOGS=0 to disable this for one session."
+  echo ""
+  journalctl -u drivertranslator.service -f -n 200
+fi
+# <<< drivertranslator tty1 autolog (managed)
+EOF
+  chown "$CONSOLE_USER:$CONSOLE_USER" "$PROFILE_FILE"
+
+  systemctl daemon-reload
+  systemctl restart getty@tty1.service
+
+  echo "Enabled. On next boot, tty1 will auto-login and show live logs. Press Ctrl+C to reach a shell."
+fi
 
 echo "Done."
 

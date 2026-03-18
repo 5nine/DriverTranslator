@@ -66,7 +66,10 @@
     "command_timeout_ms": 1500,
     "dry_run": true,
     "persistent": false,
-    "keepalive_seconds": 30
+    "keepalive_seconds": 30,
+    "set_retry_attempts": 3,
+    "set_retry_backoff_initial_ms": 200,
+    "set_retry_backoff_max_ms": 1200
   },
   "server": {
     "send_startup_notify_endpoint_online": true

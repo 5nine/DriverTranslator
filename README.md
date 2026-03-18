@@ -27,6 +27,14 @@ cd /opt/drivertranslator
 sudo bash ./linux/bin/install_drivertranslator.sh
 ```
 
+If you enable **tty1 auto-login + auto-start log view** in the installer, add your console user to `systemd-journal` so logs can be read **without sudo/password prompts** after boot:
+
+```bash
+sudo usermod -aG systemd-journal <your_console_user>
+```
+
+Then **reboot** (or log out/in). On boot, the machine will show live logs; press **`Ctrl+C`** to exit to a shell.
+
 During the installer you can choose:
 - **Dual-NIC static IP setup** (control + AVoIP) via netplan
 - System size (**TX/RX counts**) and starting TX/RX IPs (auto-assign sequential IPs)
@@ -52,6 +60,13 @@ cd /opt/drivertranslator
 bash ./linux/bin/monitor_drivertranslator.sh logs
 ```
 
+### Show logs on the local console at boot (auto-login)
+
+The installer can optionally configure **tty1 auto-login** and automatically run a live log view on boot.
+
+- **Exit logs to shell**: press `Ctrl+C`
+- **Disable for one session** (at the shell): `export DT_CONSOLE_LOGS=0`
+
 ---
 
 ## Local status webpage (control network)
@@ -70,12 +85,16 @@ Configure in `config.json`:
     "enabled": true,
     "bind": "192.168.1.100",
     "port": 8080,
-    "log_lines": 200
+    "log_lines": 200,
+    "control_token": null
   }
 }
 ```
 
 Set `bind` to your **control NIC** IP so it’s only reachable on the control network.
+
+If you want to allow changing runtime settings from the page (Controls section), set a `control_token` and include it in control URLs (example):  
+`/control/set?key=amx_verify_after_set&value=false&token=YOURTOKEN`
 
 ---
 
@@ -134,6 +153,9 @@ Message format:
   - `dry_run: true` = offline emulator (log-only)
   - `persistent: true` = fastest switching (keeps one socket per decoder open)
   - default = connect/send/close per switch
+- **AMX retry behavior**
+  - `set_retry_attempts` = total attempts for an AMX `set:<stream>` (default 3)
+  - `set_retry_backoff_initial_ms` / `set_retry_backoff_max_ms` = exponential backoff window for retries (small jitter is added)
 - **Audio follows video**
   - This project assumes you use **video switching** and let audio follow video.
 
@@ -154,6 +176,8 @@ Message format:
 ```
 
 The installer can configure static IPs for both NICs via netplan.
+
+If you only have **one NIC**, just skip the networking step (answer `N` when prompted, or run the installer with `--no-network`). The service works fine on a single interface.
 
 ---
 

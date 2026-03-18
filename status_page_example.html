@@ -1,0 +1,199 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>DriverTranslator Status (Example)</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --fg: #111111;
+      --muted: #666666;
+      --card: #ffffff;
+      --border: #dddddd;
+      --row: #f0f0f0;
+      --code-bg: #f6f6f6;
+      --code-fg: #111111;
+      --log-bg: #0b1020;
+      --log-fg: #e6e6e6;
+      --link: #0b5fff;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0b0d12;
+        --fg: #e9edf1;
+        --muted: #a9b1ba;
+        --card: #111521;
+        --border: #223046;
+        --row: #1a2233;
+        --code-bg: #0f1420;
+        --code-fg: #e9edf1;
+        --log-bg: #0b1020;
+        --log-fg: #e6e6e6;
+        --link: #8ab4ff;
+      }
+    }
+
+    [data-theme="light"] {
+      --bg: #ffffff;
+      --fg: #111111;
+      --muted: #666666;
+      --card: #ffffff;
+      --border: #dddddd;
+      --row: #f0f0f0;
+      --code-bg: #f6f6f6;
+      --code-fg: #111111;
+      --log-bg: #0b1020;
+      --log-fg: #e6e6e6;
+      --link: #0b5fff;
+    }
+
+    [data-theme="dark"] {
+      --bg: #0b0d12;
+      --fg: #e9edf1;
+      --muted: #a9b1ba;
+      --card: #111521;
+      --border: #223046;
+      --row: #1a2233;
+      --code-bg: #0f1420;
+      --code-fg: #e9edf1;
+      --log-bg: #0b1020;
+      --log-fg: #e6e6e6;
+      --link: #8ab4ff;
+    }
+
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      margin: 24px;
+      background: var(--bg);
+      color: var(--fg);
+    }
+
+    a { color: var(--link); }
+
+    .topbar {
+      max-width: 720px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .btn {
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--fg);
+      padding: 6px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .card { max-width: 720px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+    .row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--row); }
+    .row:last-child { border-bottom: 0; }
+    code { background: var(--code-bg); color: var(--code-fg); padding: 2px 6px; border-radius: 6px; }
+    pre { white-space: pre-wrap; background: var(--log-bg); color: var(--log-fg); padding: 12px; border-radius: 10px; overflow-x: auto; }
+    .subtle { color: var(--muted); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h2 style="margin:0;">DriverTranslator Status</h2>
+    <button class="btn" id="themeBtn" type="button">Toggle theme</button>
+  </div>
+  <div class="card">
+    <div class="row"><div>Uptime</div><div><code>5h 07m 12s</code></div></div>
+    <div class="row"><div>Mode</div><div><code>persistent</code></div></div>
+    <div class="row"><div>RTI clients</div><div><code>1</code></div></div>
+    <div class="row"><div>Configured TX</div><div><code>10</code></div></div>
+    <div class="row"><div>Configured RX</div><div><code>40</code></div></div>
+    <div class="row"><div>AMX connections (persistent)</div><div><code>38/40</code></div></div>
+    <div class="row"><div>AMX set retries</div><div><code>attempts=3</code> <code>backoff=200-1200ms</code></div></div>
+  </div>
+
+  <p class="subtle">
+    JSON: <a href="#"><code>/status.json</code></a> • Logs JSON: <a href="#"><code>/logs.json</code></a> • Controls JSON: <a href="#"><code>/control.json</code></a>
+  </p>
+
+  <h3>Controls</h3>
+  <div class="card">
+    <div class="row"><div>AMX verify after switch</div><div><code>true</code> <a href="#"><code>toggle</code></a></div></div>
+    <div class="row">
+      <div>AMX verify timeout</div>
+      <div>
+        <code>800ms</code>
+        <input class="btn" style="width:96px; padding:6px 8px;" type="number" min="100" max="5000" step="50" value="800"/>
+        <button class="btn" type="button">Apply</button>
+      </div>
+    </div>
+    <div class="row"><div>RTI status heartbeat</div><div><code>false</code> <a href="#"><code>toggle</code></a></div></div>
+    <div class="row"><div>AMX self-test</div><div><a href="#"><code>run now</code></a></div></div>
+  </div>
+
+  <h3>Matrix (set by RTI)</h3>
+  <p class="subtle">This table reflects the last routing commands received from RTI (emulated WyreStorm matrix state).</p>
+  <table style="border-collapse: collapse; width: 100%; max-width: 720px;">
+    <thead><tr><th style="text-align:left; padding:8px 10px;">RX (Output)</th><th style="text-align:left; padding:8px 10px;">TX (Input)</th></tr></thead>
+    <tbody>
+      <tr><td style="padding:8px 10px;"><code>OUT1-TV1</code></td><td style="padding:8px 10px;"><code>IN3-BOX3</code></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT2-TV2</code></td><td style="padding:8px 10px;"><code>IN5-BOX5</code></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT3-TV3</code></td><td style="padding:8px 10px;"><code>IN5-BOX5</code></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT4-TV4</code></td><td style="padding:8px 10px;"><code>IN1-BOX1</code></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT5-TV5</code></td><td style="padding:8px 10px;"><code>IN1-BOX1</code></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT6-TV6</code></td><td style="padding:8px 10px;"><code>IN2-BOX2</code></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT7-TV7</code></td><td style="padding:8px 10px;"><code>IN2-BOX2</code></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT8-TV8</code></td><td style="padding:8px 10px;"><code>IN10-BOX10</code></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT9-TV9</code></td><td style="padding:8px 10px;"><code>NULL</code></td></tr>
+      <tr><td style="padding:8px 10px;"><code>OUT10-TV10</code></td><td style="padding:8px 10px;"><code>IN4-BOX4</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>Recent logs</h3>
+  <pre>2026-03-17 10:12:01 INFO drivertranslator: HTTP status listening on ('192.168.1.100', 8080)
+2026-03-17 10:12:05 INFO drivertranslator: RTI connected from ('192.168.1.50', 49822)
+2026-03-17 10:12:07 INFO drivertranslator: RTI -> matrix set IN3-BOX3 OUT1-TV1
+2026-03-17 10:12:07 INFO drivertranslator: AMX -> 192.168.10.101:50002 b'set:3\r'
+2026-03-17 10:12:08 INFO drivertranslator: RTI -> matrix set IN5-BOX5 OUT2-TV2 OUT3-TV3
+2026-03-17 10:12:08 INFO drivertranslator: AMX -> 192.168.10.102:50002 b'set:5\r'
+2026-03-17 10:12:08 INFO drivertranslator: AMX -> 192.168.10.103:50002 b'set:5\r'
+2026-03-17 10:12:40 WARNING drivertranslator: AMX persistent mode enabled: keeping per-decoder sockets open.
+2026-03-17 10:13:12 ERROR drivertranslator: AMX routing failed
+2026-03-17 10:13:12 INFO drivertranslator: (rti_notify) DT: ERROR AMX route failed: Failed to connect to AMX decoder 192.168.10.140:50002: [Errno 113] No route to host
+</pre>
+
+  <p class="subtle">
+    This is a static mock-up file for preview only.
+  </p>
+
+  <script>
+    (function () {
+      const btn = document.getElementById('themeBtn');
+      const root = document.documentElement;
+      const key = 'dt_theme';
+
+      function apply(theme) {
+        if (!theme) {
+          root.removeAttribute('data-theme');
+          return;
+        }
+        root.setAttribute('data-theme', theme);
+      }
+
+      const saved = localStorage.getItem(key);
+      if (saved === 'light' || saved === 'dark') apply(saved);
+
+      btn.addEventListener('click', () => {
+        const current = root.getAttribute('data-theme');
+        const next = current === 'dark' ? 'light' : 'dark';
+        apply(next);
+        localStorage.setItem(key, next);
+      });
+    })();
+  </script>
+</body>
+</html>
+

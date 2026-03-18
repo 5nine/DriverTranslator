@@ -37,7 +37,10 @@
     "verify_after_set": true,
     "verify_timeout_ms": 800,
     "set_queue_limit": 1,
-    "self_test_on_start": true
+    "self_test_on_start": true,
+    "set_retry_attempts": 3,
+    "set_retry_backoff_initial_ms": 200,
+    "set_retry_backoff_max_ms": 1200
   },
   "server": {
     "send_startup_notify_endpoint_online": true
@@ -63,7 +66,8 @@
     "enabled": true,
     "bind": "0.0.0.0",
     "port": 8080,
-    "log_lines": 200
+    "log_lines": 200,
+    "control_token": null
   }
 }
 
