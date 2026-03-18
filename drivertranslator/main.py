@@ -11,6 +11,7 @@ import random
 import re
 import secrets
 import subprocess
+import threading
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -21,6 +22,61 @@ from typing import Any, Dict, List, Optional, Tuple
 LOG = logging.getLogger("drivertranslator")
 
 _LOG_RING: "collections.deque[str]" = collections.deque(maxlen=500)
+
+# Deduplicated RTI lines that received "unknown command" (for status page / triage).
+_UNKNOWN_CTL_MAX_KEYS = 400
+_unknown_ctl: Dict[str, Dict[str, Any]] = {}
+_unknown_ctl_lock = threading.Lock()
+
+
+def _unknown_ctl_record(line: str) -> None:
+    key = line.strip()
+    if not key or len(key) > 2000:
+        return
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with _unknown_ctl_lock:
+        if key in _unknown_ctl:
+            e = _unknown_ctl[key]
+            e["count"] = int(e["count"]) + 1
+            e["last"] = now
+            return
+        if len(_unknown_ctl) >= _UNKNOWN_CTL_MAX_KEYS:
+            victim = min(
+                _unknown_ctl.items(),
+                key=lambda kv: (int(kv[1]["count"]), kv[1]["last"]),
+            )[0]
+            del _unknown_ctl[victim]
+        _unknown_ctl[key] = {"count": 1, "first": now, "last": now}
+
+
+def _unknown_ctl_page_text() -> str:
+    with _unknown_ctl_lock:
+        items = list(_unknown_ctl.items())
+    if not items:
+        return (
+            "(No unrecognized commands yet.)\n\n"
+            "When the WyreStorm/RTI driver sends a line the emulator does not handle, "
+            "it appears here with a count."
+        )
+    items.sort(key=lambda x: (-int(x[1]["count"]), x[1]["last"]))
+    lines = [
+        "# DriverTranslator — unrecognized NHD-CTL / RTI TCP command lines",
+        "# How to read this:",
+        "#   - These are EXACT lines sent TO this service (RTI port, e.g. 2323).",
+        "#   - Server replied: unknown command",
+        "#   - COUNT = how many times that same line was sent (deduplicated).",
+        "#   - Times are UTC. Copy from the dashed line down and paste into support chat.",
+        "# ---------------------------------------------------------------------------",
+        "",
+    ]
+    for cmd, meta in items:
+        lines.append(
+            f"{int(meta['count'])}× | first: {meta['first']} | last: {meta['last']}"
+        )
+        lines.append(f"    {cmd}")
+        lines.append("")
+    return "\n".join(lines)
+
 
 # Short-lived tokens so the status page can call /control/* via fetch() (browsers do not send Basic Auth on fetch).
 _HTTP_UI_SESS_TTL_SEC = 30 * 60
@@ -1073,6 +1129,7 @@ async def _handle_http_client(
             _ui_sess_js = json.dumps(_ui_sess)
             _ctl_qs_js = json.dumps(ctl_qs)
             _amx_port = int(cfg.amx_decoder_port)
+            _unknown_pre = html.escape(_unknown_ctl_page_text())
             body = f"""<!doctype html>
 <html>
 <head>
@@ -1429,6 +1486,10 @@ async def _handle_http_client(
 
   <div class="section-title">Recent logs</div>
   <pre>{log_lines}</pre>
+
+  <div class="section-title">Unrecognized RTI commands</div>
+  <p class="subtle">Lines the WyreStorm driver sent on the <b>RTI TCP port</b> (e.g. 2323) that returned <code>unknown command</code>. Identical lines are merged; the number is how many times each was sent. Times are <b>UTC</b>. Select the box below and copy for support.</p>
+  <pre id="unknownCtlPre" style="max-height:320px;overflow-y:auto;font-size:11px;">{_unknown_pre}</pre>
 
   <div id="dtModal" class="dt-modal" hidden>
     <div class="dt-modal-backdrop" id="dtModalBackdrop"></div>
@@ -2803,6 +2864,7 @@ async def handle_client(
                     session.alias_mode = parts[4].lower() == "on"
                     writer.write(_crlf(line))  # command mirror ack
                 else:
+                    _unknown_ctl_record(line)
                     writer.write(_crlf("unknown command"))
                 await writer.drain()
                 continue
@@ -2814,7 +2876,10 @@ async def handle_client(
                 continue
 
             if lower.startswith("config get "):
-                for resp_line in _handle_config_get(cfg, session, state, line):
+                _cg_out = _handle_config_get(cfg, session, state, line)
+                if _cg_out == ["unknown command"]:
+                    _unknown_ctl_record(line)
+                for resp_line in _cg_out:
                     writer.write(_crlf(resp_line))
                 await writer.drain()
                 continue
@@ -2822,13 +2887,19 @@ async def handle_client(
             # Safe mirrors / minimal responses for RTI driver feature surface.
             # Video wall + multiview query commands (return empty lists rather than "unknown command")
             if lower.startswith(("scene get", "vw get", "wscene2 get")):
-                for resp_line in _handle_videowall_get(cfg, line):
+                _vw_out = _handle_videowall_get(cfg, line)
+                if _vw_out == ["unknown command"]:
+                    _unknown_ctl_record(line)
+                for resp_line in _vw_out:
                     writer.write(_crlf(resp_line))
                 await writer.drain()
                 continue
 
             if lower.startswith(("mscene get", "mview get")):
-                for resp_line in _handle_multiview_get(cfg, line):
+                _mv_out = _handle_multiview_get(cfg, line)
+                if _mv_out == ["unknown command"]:
+                    _unknown_ctl_record(line)
+                for resp_line in _mv_out:
                     writer.write(_crlf(resp_line))
                 await writer.drain()
                 continue
@@ -2858,7 +2929,8 @@ async def handle_client(
                 await writer.drain()
                 continue
 
-            # Unknown command
+            # Unknown command (no handler matched)
+            _unknown_ctl_record(line)
             writer.write(_crlf("unknown command"))
             await writer.drain()
 
