@@ -76,6 +76,7 @@ DriverTranslator includes a small built-in web server for local status:
 - **URL**: `http://<control-nic-ip>:8080/`
 - **JSON**: `http://<control-nic-ip>:8080/status.json`
 - **Logs (JSON)**: `http://<control-nic-ip>:8080/logs.json`
+- **Live bundle (JSON)**: `http://<control-nic-ip>:8080/live.json` — matrix + log tail + overview (used by the status page every 3s; with a password, use the same session as the page or Basic auth)
 
 Configure in `config.json`:
 
