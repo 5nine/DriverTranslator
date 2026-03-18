@@ -192,6 +192,13 @@ If you don’t have AMX hardware available:
 python3 -m drivertranslator --config ./config.emulator.json --listen 0.0.0.0 --port 2323 --log-level INFO
 ```
 
+### Emulator fault injection (simulate offline RX)
+
+In emulator mode you can force specific decoders to “act offline” so you can test `rti_notify` error reporting:
+
+- **Config**: `amx.dry_run_offline_decoders` (list of decoder IPs)
+- Example (mark RX14 offline in the default emulator IP scheme): `["192.168.10.114"]`
+
 ---
 
 ## Reference (protocol docs)

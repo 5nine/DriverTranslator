@@ -138,6 +138,7 @@ class Config:
     amx_persistent: bool
     amx_keepalive_seconds: int
     amx_bind_address: Optional[str]
+    amx_dry_run_offline_decoders: List[str]
     amx_verify_after_set: bool
     amx_verify_timeout_ms: int
     amx_set_queue_limit: int
@@ -222,6 +223,13 @@ def load_config(path: str) -> Config:
     rx_by_alias = {r.alias: r for r in rxs}
     rx_by_hostname = {r.hostname: r for r in rxs}
 
+    offline_decoders: List[str] = []
+    od = amx.get("dry_run_offline_decoders", [])
+    if isinstance(od, str):
+        offline_decoders = [x.strip() for x in od.split(",") if x.strip()]
+    elif isinstance(od, list):
+        offline_decoders = [str(x).strip() for x in od if str(x).strip()]
+
     return Config(
         nhd=nhd,
         tx_by_alias=tx_by_alias,
@@ -238,6 +246,7 @@ def load_config(path: str) -> Config:
         amx_persistent=bool(amx.get("persistent", False)),
         amx_keepalive_seconds=_as_int(amx.get("keepalive_seconds"), default=30),
         amx_bind_address=_bind_addr(amx.get("bind_address")),  # AVoIP NIC for outbound AMX
+        amx_dry_run_offline_decoders=offline_decoders,
         amx_verify_after_set=_as_bool(amx.get("verify_after_set"), default=True),
         amx_verify_timeout_ms=_clamp_int(amx.get("verify_timeout_ms"), default=800, min_v=100, max_v=5000),
         amx_set_queue_limit=_clamp_int(amx.get("set_queue_limit"), default=1, min_v=1, max_v=20),
@@ -1011,16 +1020,21 @@ class AmxClient:
 
 
 class DryRunAmxClient:
-    def __init__(self, *, decoder_port: int):
+    def __init__(self, *, decoder_port: int, offline_decoders: Optional[List[str]] = None):
         self._decoder_port = decoder_port
+        self._offline = {x.strip() for x in (offline_decoders or []) if str(x).strip()}
 
     async def set_stream(self, *, decoder_ip: str, stream: int) -> None:
         if stream <= 0:
             raise ValueError(f"Invalid AMX stream id: {stream}")
+        if decoder_ip in self._offline:
+            raise ConnectionError(f"(dry-run) Simulated offline decoder: {decoder_ip}:{self._decoder_port}")
         cmd = f"set:{stream}\\r".encode("ascii")
         LOG.info("AMX (dry-run) -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
 
     async def verify_stream(self, *, decoder_ip: str, expected_stream: int, timeout_ms: int) -> bool:
+        if decoder_ip in self._offline:
+            return False
         return True
 
 
@@ -1886,7 +1900,10 @@ async def run_server(*, cfg: Config, listen: str, port: int) -> None:
 
     if cfg.amx_dry_run:
         LOG.warning("AMX dry-run enabled: no TCP connections will be made.")
-        amx: Any = DryRunAmxClient(decoder_port=cfg.amx_decoder_port)
+        amx: Any = DryRunAmxClient(
+            decoder_port=cfg.amx_decoder_port,
+            offline_decoders=cfg.amx_dry_run_offline_decoders,
+        )
     elif cfg.amx_persistent:
         LOG.warning("AMX persistent mode enabled: keeping per-decoder sockets open.")
         amx = PersistentAmxClient(

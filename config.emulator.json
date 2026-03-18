@@ -69,7 +69,8 @@
     "keepalive_seconds": 30,
     "set_retry_attempts": 3,
     "set_retry_backoff_initial_ms": 200,
-    "set_retry_backoff_max_ms": 1200
+    "set_retry_backoff_max_ms": 1200,
+    "dry_run_offline_decoders": ["192.168.10.114"]
   },
   "server": {
     "send_startup_notify_endpoint_online": true

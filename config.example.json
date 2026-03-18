@@ -34,6 +34,7 @@
     "persistent": false,
     "keepalive_seconds": 30,
     "bind_address": null,
+    "dry_run_offline_decoders": [],
     "verify_after_set": true,
     "verify_timeout_ms": 800,
     "set_queue_limit": 1,
