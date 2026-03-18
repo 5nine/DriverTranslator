@@ -27,6 +27,73 @@ _LOG_RING: "collections.deque[str]" = collections.deque(maxlen=500)
 _UNKNOWN_CTL_MAX_KEYS = 400
 _unknown_ctl: Dict[str, Dict[str, Any]] = {}
 _unknown_ctl_lock = threading.Lock()
+_unknown_ctl_file: Optional[Path] = None
+
+
+def _unknown_ctl_configure(*, enabled: bool, config_dir: Path, persist_path: Optional[str]) -> None:
+    global _unknown_ctl_file
+    if not enabled:
+        _unknown_ctl_file = None
+        return
+    if persist_path and str(persist_path).strip():
+        _unknown_ctl_file = Path(persist_path).expanduser().resolve()
+    else:
+        _unknown_ctl_file = (config_dir / "unknown_ctl.json").resolve()
+
+
+def _unknown_ctl_load_from_disk() -> None:
+    global _unknown_ctl
+    path = _unknown_ctl_file
+    if path is None or not path.is_file():
+        return
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        LOG.warning("unknown_ctl: could not load %s: %s", path, e)
+        return
+    entries = raw.get("entries") if isinstance(raw, dict) else None
+    if not isinstance(entries, dict):
+        return
+    loaded: Dict[str, Dict[str, Any]] = {}
+    for k, v in entries.items():
+        if not isinstance(k, str) or not isinstance(v, dict):
+            continue
+        try:
+            c = int(v.get("count", 1))
+            first = str(v.get("first", ""))
+            last = str(v.get("last", ""))
+        except (TypeError, ValueError):
+            continue
+        if c < 1 or len(k) > 2000:
+            continue
+        loaded[k] = {"count": c, "first": first or "?", "last": last or "?"}
+        if len(loaded) >= _UNKNOWN_CTL_MAX_KEYS:
+            break
+    with _unknown_ctl_lock:
+        _unknown_ctl.clear()
+        _unknown_ctl.update(loaded)
+    LOG.info("unknown_ctl: loaded %d entr%s from %s", len(loaded), "y" if len(loaded) == 1 else "ies", path)
+
+
+def _unknown_ctl_save_to_disk() -> None:
+    path = _unknown_ctl_file
+    if path is None:
+        return
+    with _unknown_ctl_lock:
+        payload = {"v": 1, "entries": dict(_unknown_ctl)}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        tmp.replace(path)
+    except OSError as e:
+        LOG.warning("unknown_ctl: save failed %s: %s", path, e)
+
+
+def _unknown_ctl_clear_persisted() -> None:
+    with _unknown_ctl_lock:
+        _unknown_ctl.clear()
+    _unknown_ctl_save_to_disk()
 
 
 def _unknown_ctl_record(line: str) -> None:
@@ -39,14 +106,15 @@ def _unknown_ctl_record(line: str) -> None:
             e = _unknown_ctl[key]
             e["count"] = int(e["count"]) + 1
             e["last"] = now
-            return
-        if len(_unknown_ctl) >= _UNKNOWN_CTL_MAX_KEYS:
-            victim = min(
-                _unknown_ctl.items(),
-                key=lambda kv: (int(kv[1]["count"]), kv[1]["last"]),
-            )[0]
-            del _unknown_ctl[victim]
-        _unknown_ctl[key] = {"count": 1, "first": now, "last": now}
+        else:
+            if len(_unknown_ctl) >= _UNKNOWN_CTL_MAX_KEYS:
+                victim = min(
+                    _unknown_ctl.items(),
+                    key=lambda kv: (int(kv[1]["count"]), kv[1]["last"]),
+                )[0]
+                del _unknown_ctl[victim]
+            _unknown_ctl[key] = {"count": 1, "first": now, "last": now}
+    _unknown_ctl_save_to_disk()
 
 
 def _unknown_ctl_page_text() -> str:
@@ -269,6 +337,8 @@ class Config:
     rti_control_bind_address: Optional[str]
     rti_control_port: int
     rti_control_reboot_command: str
+    unknown_ctl_enabled: bool
+    unknown_ctl_persist_path: Optional[str]
 
 
 def load_config(path: str) -> Config:
@@ -323,6 +393,9 @@ def load_config(path: str) -> Config:
     rti_status = raw.get("rti_status", {})
     http_status = raw.get("http_status", {})
     rti_control = raw.get("rti_control", {})
+    unknown_ctl = raw.get("unknown_ctl") if isinstance(raw.get("unknown_ctl"), dict) else {}
+    uc_pp = unknown_ctl.get("persist_path")
+    uc_path_s = str(uc_pp).strip() if uc_pp is not None and str(uc_pp).strip() else None
 
     tx_by_alias = {t.alias: t for t in txs}
     tx_by_hostname = {t.hostname: t for t in txs}
@@ -385,6 +458,8 @@ def load_config(path: str) -> Config:
         rti_control_bind_address=_bind_addr(rti_control.get("bind_address")),
         rti_control_port=_as_int(rti_control.get("port"), default=0),
         rti_control_reboot_command=str(rti_control.get("reboot_command", "reboot")).strip() or "reboot",
+        unknown_ctl_enabled=_as_bool(unknown_ctl.get("enabled"), default=True),
+        unknown_ctl_persist_path=uc_path_s,
     )
 
 
@@ -917,6 +992,7 @@ async def _handle_http_client(
         # /control/set?key=<k>&value=<v>[&token=<t>]
         # /control/selftest?[token=<t>]
         # /control/reboot
+        # /control/clear_unknown_ctl
         if path.startswith("/control/"):
             # very small query parsing (no urllib dependency)
             qs = ""
@@ -1079,6 +1155,29 @@ async def _handle_http_client(
                     writer.write(_http_response("200 OK", "application/json", body))
                 return
 
+            if path.startswith("/control/clear_unknown_ctl"):
+                _unknown_ctl_clear_persisted()
+                LOG.info("HTTP control [source=%s]: cleared unknown_ctl list", ctl_via)
+                if _params_want_html(params):
+                    writer.write(
+                        _http_response(
+                            "200 OK",
+                            "text/html; charset=utf-8",
+                            _control_feedback_html(
+                                ok=True,
+                                headline="List cleared",
+                                paragraphs=[
+                                    "The unrecognized-command list is empty.",
+                                    "Reload the status page to refresh the box below.",
+                                ],
+                            ),
+                        )
+                    )
+                else:
+                    body = (json.dumps({"ok": True, "cleared": True}, indent=2) + "\n").encode("utf-8")
+                    writer.write(_http_response("200 OK", "application/json", body))
+                return
+
             if path.startswith("/control/reboot"):
                 if _params_want_html(params):
                     writer.write(
@@ -1130,6 +1229,17 @@ async def _handle_http_client(
             _ctl_qs_js = json.dumps(ctl_qs)
             _amx_port = int(cfg.amx_decoder_port)
             _unknown_pre = html.escape(_unknown_ctl_page_text())
+            if _unknown_ctl_file is not None:
+                _uc_persist_note = (
+                    "Stored on disk at <code>"
+                    + html.escape(str(_unknown_ctl_file))
+                    + "</code> (survives restart). Use the button below the list to clear."
+                )
+            else:
+                _uc_persist_note = (
+                    "<b>Not persisted</b> (<code>unknown_ctl.enabled</code> is false in config); "
+                    "restart clears this list. Set <code>unknown_ctl.enabled</code> to true to save beside config."
+                )
             body = f"""<!doctype html>
 <html>
 <head>
@@ -1355,6 +1465,25 @@ async def _handle_http_client(
 
     .subtle {{ color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0 0 14px 0; max-width: 720px; }}
 
+    .unk-ctl-actions {{
+      margin: 14px 0 8px 0;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }}
+    .unk-ctl-actions .ctrl-run {{
+      padding: 10px 18px;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      font-size: 14px;
+      border: none;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+    }}
+    .unk-ctl-actions .ctrl-run:hover {{ filter: brightness(1.06); }}
+    .unk-ctl-actions .ctrl-run:disabled {{ opacity: 0.55; cursor: not-allowed; }}
+
     .help-icon {{
       display: inline-flex;
       align-items: center;
@@ -1488,8 +1617,12 @@ async def _handle_http_client(
   <pre>{log_lines}</pre>
 
   <div class="section-title">Unrecognized RTI commands</div>
-  <p class="subtle">Lines the WyreStorm driver sent on the <b>RTI TCP port</b> (e.g. 2323) that returned <code>unknown command</code>. Identical lines are merged; the number is how many times each was sent. Times are <b>UTC</b>. Select the box below and copy for support.</p>
+  <p class="subtle">Lines the WyreStorm driver sent on the <b>RTI TCP port</b> (e.g. 2323) that returned <code>unknown command</code> (or similar). Identical lines are merged; the number is how many times each was sent. Times are <b>UTC</b>. Select the box below and copy for support. {_uc_persist_note}</p>
   <pre id="unknownCtlPre" style="max-height:320px;overflow-y:auto;font-size:11px;">{_unknown_pre}</pre>
+  <div class="unk-ctl-actions">
+    <button type="button" class="ctrl-run" data-dt-ctl="clear_unknown_ctl">Clear unrecognized list</button>
+    <span class="subtle" style="display:block;margin-top:8px;margin-bottom:0;">Wipes this list and the on-disk file (when persistence is enabled). Page reloads after confirm.</span>
+  </div>
 
   <div id="dtModal" class="dt-modal" hidden>
     <div class="dt-modal-backdrop" id="dtModalBackdrop"></div>
@@ -1652,6 +1785,36 @@ async def _handle_http_client(
               }}
             }}
             showModal(allOk, allOk ? 'Self-test passed' : 'Self-test: issues found', detail);
+          }} catch (e) {{
+            showModal(false, 'Network error', String(e.message || e));
+          }} finally {{
+            setBusy(false);
+          }}
+        }});
+      }});
+
+      document.querySelectorAll('[data-dt-ctl="clear_unknown_ctl"]').forEach((btn) => {{
+        btn.addEventListener('click', async () => {{
+          if (!confirm('Clear the unrecognized-command list? This cannot be undone.')) return;
+          setBusy(true);
+          try {{
+            const r = await fetch(ctlUrl('/control/clear_unknown_ctl'));
+            if (r.status === 401) {{
+              showModal(false, 'Session expired', 'Refresh this page and sign in again, then retry.');
+              return;
+            }}
+            if (r.status === 403) {{
+              showModal(false, 'Not allowed', 'Wrong or missing control token in config.');
+              return;
+            }}
+            const t = await r.text();
+            if (!r.ok) {{
+              let j = null;
+              try {{ j = JSON.parse(t); }} catch (e) {{}}
+              showModal(false, 'Failed', (j && j.error) ? j.error : (t.slice(0, 200) || r.statusText));
+              return;
+            }}
+            location.reload();
           }} catch (e) {{
             showModal(false, 'Network error', String(e.message || e));
           }} finally {{
@@ -2942,8 +3105,15 @@ async def handle_client(
             await writer.wait_closed()
 
 
-async def run_server(*, cfg: Config, listen: str, port: int) -> None:
+async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -> None:
     started_at = time.monotonic()
+    _cfg_dir = Path(config_path).expanduser().resolve().parent
+    _unknown_ctl_configure(
+        enabled=cfg.unknown_ctl_enabled,
+        config_dir=_cfg_dir,
+        persist_path=cfg.unknown_ctl_persist_path,
+    )
+    _unknown_ctl_load_from_disk()
     # Optional RTI UDP control listener (e.g., reboot command)
     if cfg.rti_control_enabled and cfg.rti_control_port > 0:
         loop = asyncio.get_running_loop()
@@ -3092,7 +3262,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     _validate_config(cfg)
 
     try:
-        asyncio.run(run_server(cfg=cfg, listen=args.listen, port=args.port))
+        asyncio.run(
+            run_server(cfg=cfg, config_path=args.config, listen=args.listen, port=args.port)
+        )
     except KeyboardInterrupt:
         return 130
     return 0

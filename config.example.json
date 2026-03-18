@@ -76,6 +76,10 @@
     "bind_address": null,
     "port": 0,
     "reboot_command": "DT REBOOT"
+  },
+  "unknown_ctl": {
+    "enabled": true,
+    "persist_path": null
   }
 }
 

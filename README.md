@@ -98,6 +98,7 @@ Set `bind` to your **control NIC** IP so it’s only reachable on the control ne
 - The status page **reloads every 5 seconds** while the browser tab is visible (matrix, logs, overview stay current).
 - Web controls (including **reboot**) are available under the page’s **Controls** section after you log in.
 - If `http_status.control_token` is set, control endpoints also require `token=...` in the URL (optional extra safety).
+- **Unrecognized RTI commands** (status page) are persisted to `unknown_ctl.json` next to your config file, or to `unknown_ctl.persist_path` if set. Set `unknown_ctl.enabled` to `false` for in-memory only. **Clear list** on the page wipes the list (and the file when persistence is on).
 
 ---
 
