@@ -1620,6 +1620,7 @@ async def _handle_http_client(
   <p class="subtle">Lines the WyreStorm driver sent on the <b>RTI TCP port</b> (e.g. 2323) that returned <code>unknown command</code> (or similar). Identical lines are merged; the number is how many times each was sent. Times are <b>UTC</b>. Select the box below and copy for support. {_uc_persist_note}</p>
   <pre id="unknownCtlPre" style="max-height:320px;overflow-y:auto;font-size:11px;">{_unknown_pre}</pre>
   <div class="unk-ctl-actions">
+    <button type="button" class="ctrl-run" data-dt-ctl="copy_unknown_ctl">Copy all</button>
     <button type="button" class="ctrl-run" data-dt-ctl="clear_unknown_ctl">Clear unrecognized list</button>
     <span class="subtle" style="display:block;margin-top:8px;margin-bottom:0;">Wipes this list and the on-disk file (when persistence is enabled). Page reloads after confirm.</span>
   </div>
@@ -1819,6 +1820,23 @@ async def _handle_http_client(
             showModal(false, 'Network error', String(e.message || e));
           }} finally {{
             setBusy(false);
+          }}
+        }});
+      }});
+
+      document.querySelectorAll('[data-dt-ctl="copy_unknown_ctl"]').forEach((btn) => {{
+        btn.addEventListener('click', async () => {{
+          const pre = document.getElementById('unknownCtlPre');
+          if (!pre) {{
+            showModal(false, 'Not found', 'Unknown command list box is missing.');
+            return;
+          }}
+          try {{
+            const text = (pre.textContent || '').replace(/\u00a0/g, ' ').trimEnd();
+            await navigator.clipboard.writeText(text);
+            showModal(true, 'Copied', 'Copied full unrecognized-command list to clipboard.');
+          }} catch (e) {{
+            showModal(false, 'Copy failed', 'Browser blocked clipboard access. Select the box and copy manually.');
           }}
         }});
       }});
@@ -2792,16 +2810,17 @@ async def handle_client(
 
             LOG.info("RTI -> %s", line)
             lower = line.lower()
+            parts = line.split()
+            parts_lower = [p.lower() for p in parts]
 
             # Handle known commands.
-            if lower.startswith("matrix set "):
+            if len(parts) >= 4 and parts_lower[:2] == ["matrix", "set"]:
                 ok = False
                 resp = "unknown command"
                 failures: List[Tuple[str, str, str]] = []
                 try:
                     ok, resp, failures = await _handle_matrix_set(cfg, amx, line)
                     if ok:
-                        parts = line.split()
                         tx_token = parts[2]
                         tx_alias: Optional[str]
                         if tx_token.upper() == "NULL":
@@ -2853,7 +2872,6 @@ async def handle_client(
                 else:
                     # Mark RX as online on successful send
                     try:
-                        parts = line.split()
                         for tok in parts[3:]:
                             rx_obj = _lookup_rx(cfg, tok)
                             if rx_obj is not None:
@@ -2866,10 +2884,9 @@ async def handle_client(
                 continue
 
             # Breakaway switching
-            if lower.startswith("matrix ") and " set " in lower:
-                parts = line.split()
+            if len(parts) >= 5 and parts_lower[0] == "matrix" and parts_lower[2] == "set":
                 # matrix <kind> set <TX|NULL> <RX...>
-                if len(parts) >= 5 and parts[0].lower() == "matrix" and parts[2].lower() == "set":
+                if len(parts) >= 5 and parts_lower[0] == "matrix" and parts_lower[2] == "set":
                     kind = parts[1].lower()
                     tx_token = parts[3]
                     rx_tokens = parts[4:]
@@ -2954,10 +2971,9 @@ async def handle_client(
                         continue
 
             # Matrix query commands used for RTI feedback variables
-            if lower.startswith("matrix ") and " get" in lower:
-                parts = line.split()
+            if len(parts) >= 2 and parts_lower[0] == "matrix" and "get" in parts_lower:
                 # matrix get [<RX...>]  — primary all-media assignments (§13.3)
-                if len(parts) >= 2 and parts[0].lower() == "matrix" and parts[1].lower() == "get":
+                if len(parts) >= 2 and parts_lower[0] == "matrix" and parts_lower[1] == "get":
                     rx_tokens = parts[2:]
                     rx_aliases_m: List[str] = []
                     if rx_tokens:
@@ -2983,7 +2999,7 @@ async def handle_client(
                 # Examples:
                 # matrix video get [<RX...>]
                 # matrix audio get [<RX...>]
-                if len(parts) >= 3 and parts[0].lower() == "matrix" and parts[2].lower() == "get":
+                if len(parts) >= 3 and parts_lower[0] == "matrix" and parts_lower[2] == "get":
                     kind = parts[1].lower()
                     rx_tokens = parts[3:]
                     rx_aliases: List[str] = []
