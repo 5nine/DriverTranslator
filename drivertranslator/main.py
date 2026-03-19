@@ -1831,9 +1831,30 @@ async def _handle_http_client(
             showModal(false, 'Not found', 'Unknown command list box is missing.');
             return;
           }}
+          const text = (pre.textContent || '').replace(/\u00a0/g, ' ').trimEnd();
+          if (!text) {{
+            showModal(true, 'Copied', 'List is empty.');
+            return;
+          }}
           try {{
-            const text = (pre.textContent || '').replace(/\u00a0/g, ' ').trimEnd();
-            await navigator.clipboard.writeText(text);
+            if (navigator.clipboard && window.isSecureContext) {{
+              await navigator.clipboard.writeText(text);
+              showModal(true, 'Copied', 'Copied full unrecognized-command list to clipboard.');
+              return;
+            }}
+            // Fallback for HTTP/non-secure contexts where Clipboard API is blocked.
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            ta.style.top = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            if (!ok) throw new Error('execCommand copy failed');
             showModal(true, 'Copied', 'Copied full unrecognized-command list to clipboard.');
           }} catch (e) {{
             showModal(false, 'Copy failed', 'Browser blocked clipboard access. Select the box and copy manually.');
