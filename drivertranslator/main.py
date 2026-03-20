@@ -3652,10 +3652,6 @@ async def handle_client(
                 continue
 
             LOG.info("RTI -> %s", line)
-            if runtime.expanded_log:
-                # Make whitespace and CR/LF visible for protocol-parity troubleshooting.
-                visible = line.replace(" ", "·").replace("\t", "\\t")
-                LOG.info("RTI -> debug visible='%s' raw=%r", visible, raw)
             lower = line.lower()
             parts = line.split()
             parts_lower = [p.lower() for p in parts]
