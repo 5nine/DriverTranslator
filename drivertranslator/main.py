@@ -121,6 +121,7 @@ def _unknown_ctl_record(line: str) -> None:
 def _persist_runtime_setting_to_config(*, config_path: str, key: str, value: Any) -> None:
     mapping: Dict[str, Tuple[str, str]] = {
         "amx_dry_run": ("amx", "dry_run"),
+        "amx_persistent": ("amx", "persistent"),
         "amx_verify_after_set": ("amx", "verify_after_set"),
         "amx_verify_timeout_ms": ("amx", "verify_timeout_ms"),
         "rti_status_enabled": ("rti_status", "enabled"),
@@ -751,6 +752,25 @@ async def _do_reboot(*, reason: str) -> None:
         subprocess.Popen(["systemctl", "reboot"])
 
 
+async def _do_service_restart(*, reason: str) -> None:
+    LOG.warning("SERVICE RESTART requested: %s", reason)
+    await asyncio.sleep(0.5)
+    cmds = [
+        ["/usr/bin/systemctl", "restart", "drivertranslator"],
+        ["systemctl", "restart", "drivertranslator"],
+    ]
+    for cmd in cmds:
+        try:
+            subprocess.Popen(cmd)
+            return
+        except FileNotFoundError:
+            continue
+        except Exception:
+            LOG.exception("Failed to execute service restart command: %r", cmd)
+            return
+    LOG.error("Unable to restart service: systemctl not found")
+
+
 async def _amx_self_test(*, cfg: Config, amx: Any) -> Dict[str, Any]:
     """
     Connectivity self-test: attempt to connect to each configured decoder IP.
@@ -1029,6 +1049,7 @@ async def _handle_http_client(
         # Basic control endpoints (optional token).
         # /control/set?key=<k>&value=<v>[&token=<t>]
         # /control/selftest?[token=<t>]
+        # /control/restart
         # /control/reboot
         # /control/clear_unknown_ctl
         if path.startswith("/control/"):
@@ -1088,7 +1109,7 @@ async def _handle_http_client(
                         value,
                     )
                     bad_msg = (
-                        "Expected key amx_dry_run, amx_verify_after_set, rti_status_enabled, or expanded_log with true/false, "
+                        "Expected key amx_dry_run, amx_persistent, amx_verify_after_set, rti_status_enabled, or expanded_log with true/false, "
                         "or amx_verify_timeout_ms with a number (100-5000)."
                     )
                     if want_html:
@@ -1117,6 +1138,12 @@ async def _handle_http_client(
                         v = snap.get("amx_dry_run")
                         paras = [
                             f"amx_dry_run is now {str(v).lower()}.",
+                            "Saved to config. Restart DriverTranslator to apply this mode change.",
+                        ]
+                    elif key == "amx_persistent":
+                        v = snap.get("amx_persistent")
+                        paras = [
+                            f"amx_persistent is now {str(v).lower()} ({'persistent' if v else 'non-persistent connect-close'} mode).",
                             "Saved to config. Restart DriverTranslator to apply this mode change.",
                         ]
                     elif key == "amx_verify_after_set":
@@ -1152,6 +1179,7 @@ async def _handle_http_client(
                                 paragraphs=paras,
                                 pre_json={
                                     "amx_dry_run": snap.get("amx_dry_run"),
+                                    "amx_persistent": snap.get("amx_persistent"),
                                     "amx_verify_after_set": snap.get("amx_verify_after_set"),
                                     "amx_verify_timeout_ms": snap.get("amx_verify_timeout_ms"),
                                     "rti_status_enabled": snap.get("rti_status_enabled"),
@@ -1164,11 +1192,12 @@ async def _handle_http_client(
                     body = (json.dumps(snap, indent=2) + "\n").encode("utf-8")
                     writer.write(_http_response("200 OK", "application/json", body))
                 LOG.info(
-                    "HTTP control [source=%s]: set %s=%r (dry_run=%s verify_after_set=%s verify_timeout_ms=%s rti_status=%s expanded_log=%s)",
+                    "HTTP control [source=%s]: set %s=%r (dry_run=%s persistent=%s verify_after_set=%s verify_timeout_ms=%s rti_status=%s expanded_log=%s)",
                     ctl_via,
                     key,
                     snap.get(key),
                     snap.get("amx_dry_run"),
+                    snap.get("amx_persistent"),
                     snap.get("amx_verify_after_set"),
                     snap.get("amx_verify_timeout_ms"),
                     snap.get("rti_status_enabled"),
@@ -1236,6 +1265,29 @@ async def _handle_http_client(
                 else:
                     body = (json.dumps({"ok": True, "cleared": True}, indent=2) + "\n").encode("utf-8")
                     writer.write(_http_response("200 OK", "application/json", body))
+                return
+
+            if path.startswith("/control/restart"):
+                if _params_want_html(params):
+                    writer.write(
+                        _http_response(
+                            "200 OK",
+                            "text/html; charset=utf-8",
+                            _control_feedback_html(
+                                ok=True,
+                                headline="Service restart scheduled",
+                                paragraphs=[
+                                    "DriverTranslator service will restart shortly.",
+                                    "This page connection may briefly drop while the process restarts.",
+                                ],
+                            ),
+                        )
+                    )
+                else:
+                    body = (json.dumps({"ok": True, "action": "service_restart"}, indent=2) + "\n").encode("utf-8")
+                    writer.write(_http_response("200 OK", "application/json", body))
+                LOG.warning("HTTP control [source=%s]: service restart requested", ctl_via)
+                asyncio.create_task(_do_service_restart(reason=f"http_control:{ctl_via}"))
                 return
 
             if path.startswith("/control/reboot"):
@@ -1658,6 +1710,13 @@ async def _handle_http_client(
       </div>
     </div>
     <div class="row">
+      <div><b>AMX persistent mode</b><span class="help-icon" title="When ON, keep a socket open per decoder. When OFF, use connect-close per command. Saved to config; restart required to apply.">?</span></div>
+      <div class="ctrl-actions">
+        <code id="st_amx_persistent">{str(rt.get('amx_persistent', cfg.amx_persistent)).lower()}</code>
+        <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="amx_persistent" data-value="{'false' if rt.get('amx_persistent', cfg.amx_persistent) else 'true'}">Toggle</button>
+      </div>
+    </div>
+    <div class="row">
       <div><b>AMX verify after switch</b><span class="help-icon" title="When ON, after each route the translator asks each affected decoder for STREAM via AMX. Mismatches send rti_notify only; RTI still gets an immediate matrix ack.">?</span></div>
       <div class="ctrl-actions">
         <code id="st_amx_verify">{str(rt['amx_verify_after_set']).lower()}</code>
@@ -1689,6 +1748,10 @@ async def _handle_http_client(
     <div class="row">
       <div><b>AMX self-test</b><span class="help-icon" title="Short TCP connect to every configured decoder IP. In dry-run mode all decoders count as reachable without connecting.">?</span></div>
       <div class="ctrl-actions"><button type="button" class="ctrl-run" data-dt-ctl="selftest">Run now</button></div>
+    </div>
+    <div class="row">
+      <div><b>Restart DriverTranslator</b><span class="help-icon" title="Restarts only the DriverTranslator service (systemctl restart drivertranslator). Brief control interruption expected.">?</span></div>
+      <div class="ctrl-actions"><button type="button" class="ctrl-run" data-dt-ctl="restart">Restart</button></div>
     </div>
     <div class="row">
       <div><b>Reboot host</b><span class="help-icon" title="Reboots this Linux machine (systemctl reboot). SSH and this page drop until the system is back.">?</span></div>
@@ -1765,6 +1828,8 @@ async def _handle_http_client(
       function setSavedMessage(key, j) {{
         if (key === 'amx_dry_run')
           return 'AMX dry-run mode is now ' + String(j.amx_dry_run).toLowerCase() + '. Saved to config; restart DriverTranslator to apply.';
+        if (key === 'amx_persistent')
+          return 'AMX persistent mode is now ' + String(j.amx_persistent).toLowerCase() + '. Saved to config; restart DriverTranslator to apply.';
         if (key === 'amx_verify_timeout_ms')
           return 'Verify timeout is now ' + j.amx_verify_timeout_ms + ' ms. Applies immediately; no restart.';
         if (key === 'amx_verify_after_set')
@@ -1815,6 +1880,11 @@ async def _handle_http_client(
                 const el = document.getElementById('st_amx_dry_run');
                 if (el) el.textContent = String(j.amx_dry_run).toLowerCase();
                 btn.setAttribute('data-value', j.amx_dry_run ? 'false' : 'true');
+              }}
+              if (key === 'amx_persistent') {{
+                const el = document.getElementById('st_amx_persistent');
+                if (el) el.textContent = String(j.amx_persistent).toLowerCase();
+                btn.setAttribute('data-value', j.amx_persistent ? 'false' : 'true');
               }}
               if (key === 'rti_status_enabled') {{
                 const el = document.getElementById('st_rti_status');
@@ -1978,6 +2048,22 @@ async def _handle_http_client(
             const r = await fetch(ctlUrl('/control/reboot'));
             await handleControlResponse(r, 'Reboot scheduled', () =>
               'The system will restart shortly. Reopen this page after boot if needed.');
+          }} catch (e) {{
+            showModal(false, 'Network error', String(e.message || e));
+          }} finally {{
+            setBusy(false);
+          }}
+        }});
+      }});
+
+      document.querySelectorAll('[data-dt-ctl="restart"]').forEach((btn) => {{
+        btn.addEventListener('click', async () => {{
+          if (!confirm('Restart DriverTranslator service now? Control may drop briefly.')) return;
+          setBusy(true);
+          try {{
+            const r = await fetch(ctlUrl('/control/restart'));
+            await handleControlResponse(r, 'Service restart scheduled', () =>
+              'DriverTranslator will restart shortly. Reload this page if it disconnects.');
           }} catch (e) {{
             showModal(false, 'Network error', String(e.message || e));
           }} finally {{
@@ -2905,6 +2991,7 @@ class RuntimeSettings:
     def __init__(self, cfg: Config) -> None:
         self._lock = asyncio.Lock()
         self.amx_dry_run: bool = cfg.amx_dry_run
+        self.amx_persistent: bool = cfg.amx_persistent
         self.amx_verify_after_set: bool = cfg.amx_verify_after_set
         self.amx_verify_timeout_ms: int = cfg.amx_verify_timeout_ms
         self.amx_self_test_on_start: bool = cfg.amx_self_test_on_start
@@ -2916,6 +3003,7 @@ class RuntimeSettings:
         async with self._lock:
             return {
                 "amx_dry_run": self.amx_dry_run,
+                "amx_persistent": self.amx_persistent,
                 "amx_verify_after_set": self.amx_verify_after_set,
                 "amx_verify_timeout_ms": self.amx_verify_timeout_ms,
                 "amx_self_test_on_start": self.amx_self_test_on_start,
@@ -2928,6 +3016,8 @@ class RuntimeSettings:
         async with self._lock:
             if key == "amx_dry_run":
                 self.amx_dry_run = value
+            elif key == "amx_persistent":
+                self.amx_persistent = value
             elif key == "amx_verify_after_set":
                 self.amx_verify_after_set = value
             elif key == "amx_self_test_on_start":
@@ -3607,6 +3697,7 @@ async def handle_client(
 
                 if failures:
                     for (rx_a, ip, err) in failures:
+                        LOG.error("AMX SEND FAIL route decoder=%s rx=%s cmd=%r err=%s", ip, rx_a, f"set:{tx_obj.amx_stream}" if tx_obj is not None else "set:<unknown>", err)
                         state.set_rx_online(rx_a, False)
                         await notifier.problem(f"amx.set.{ip}", f"DT: ERROR AMX route failed: {rx_a} ({ip}): {err}")
                     await notifier.problem(
@@ -3671,6 +3762,7 @@ async def handle_client(
                                 )
                                 if failures:
                                     for (rx_a, ip, err) in failures:
+                                        LOG.error("AMX SEND FAIL breakaway decoder=%s rx=%s cmd=%r err=%s", ip, rx_a, f"set:{tx_obj.amx_stream}", err)
                                         await notifier.problem(
                                             f"amx.set.{ip}",
                                             f"DT: ERROR AMX breakaway video route failed: {rx_a} ({ip}): {err}",
@@ -3831,6 +3923,7 @@ async def handle_client(
 
                     if failures:
                         for (rx_a, ip, err) in failures:
+                            LOG.error("AMX SEND FAIL cec decoder=%s rx=%s cmd=%r err=%s", ip, rx_a, "hdmiOn" if hdmi_enabled else "hdmiOff", err)
                             await notifier.problem(
                                 f"amx.hdmi.{ip}",
                                 f"DT: ERROR AMX HDMI control failed: {rx_a} ({ip}): {err}",
