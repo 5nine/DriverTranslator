@@ -732,6 +732,15 @@ def _parse_amx_status(data: bytes) -> Dict[str, str]:
     return out
 
 
+def _hdmi_enabled_from_status_fields(fields: Dict[str, str]) -> Optional[bool]:
+    hdmi_off = (fields.get("HDMIOFF") or "").strip().lower()
+    if hdmi_off == "on":
+        return False
+    if hdmi_off == "off":
+        return True
+    return None
+
+
 async def _do_reboot(*, reason: str) -> None:
     LOG.error("REBOOT requested: %s", reason)
     await asyncio.sleep(1.0)
