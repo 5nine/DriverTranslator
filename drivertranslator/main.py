@@ -28,6 +28,7 @@ _UNKNOWN_CTL_MAX_KEYS = 400
 _unknown_ctl: Dict[str, Dict[str, Any]] = {}
 _unknown_ctl_lock = threading.Lock()
 _unknown_ctl_file: Optional[Path] = None
+_config_write_lock = threading.Lock()
 
 
 def _unknown_ctl_configure(*, enabled: bool, config_dir: Path, persist_path: Optional[str]) -> None:
@@ -115,6 +116,28 @@ def _unknown_ctl_record(line: str) -> None:
                 del _unknown_ctl[victim]
             _unknown_ctl[key] = {"count": 1, "first": now, "last": now}
     _unknown_ctl_save_to_disk()
+
+
+def _persist_runtime_setting_to_config(*, config_path: str, key: str, value: Any) -> None:
+    mapping: Dict[str, Tuple[str, str]] = {
+        "amx_verify_after_set": ("amx", "verify_after_set"),
+        "amx_verify_timeout_ms": ("amx", "verify_timeout_ms"),
+        "rti_status_enabled": ("rti_status", "enabled"),
+        "expanded_log": ("server", "expanded_log"),
+    }
+    target = mapping.get(key)
+    if target is None:
+        return
+    section, leaf = target
+    path = Path(config_path).expanduser().resolve()
+    with _config_write_lock:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        obj = raw.get(section)
+        if not isinstance(obj, dict):
+            obj = {}
+            raw[section] = obj
+        obj[leaf] = value
+        path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
 
 
 def _unknown_ctl_page_text() -> str:
@@ -302,6 +325,7 @@ class Config:
     amx_connect_timeout_ms: int
     amx_command_timeout_ms: int
     send_startup_notify_endpoint_online: bool
+    expanded_log: bool
     amx_dry_run: bool
     amx_persistent: bool
     amx_keepalive_seconds: int
@@ -421,6 +445,7 @@ def load_config(path: str) -> Config:
         send_startup_notify_endpoint_online=bool(
             server.get("send_startup_notify_endpoint_online", True)
         ),
+        expanded_log=_as_bool(server.get("expanded_log"), default=False),
         amx_dry_run=bool(amx.get("dry_run", False)),
         amx_persistent=bool(amx.get("persistent", False)),
         amx_keepalive_seconds=_as_int(amx.get("keepalive_seconds"), default=30),
@@ -929,6 +954,7 @@ async def _handle_http_client(
     runtime: RuntimeSettings,
     problems: ProblemState,
     started_at: float,
+    config_path: str,
 ) -> None:
     try:
         try:
@@ -1036,6 +1062,12 @@ async def _handle_http_client(
                         await runtime.set_bool(key, value.lower() in ("true", "1", "yes", "y", "on"))
                     else:
                         await runtime.set_int(key, int(value))
+                    snap = await runtime.snapshot()
+                    _persist_runtime_setting_to_config(
+                        config_path=config_path,
+                        key=key,
+                        value=snap.get(key),
+                    )
                 except Exception:
                     LOG.warning(
                         "HTTP control [source=%s]: set rejected key=%r value=%r",
@@ -1044,7 +1076,7 @@ async def _handle_http_client(
                         value,
                     )
                     bad_msg = (
-                        "Expected key amx_verify_after_set or rti_status_enabled with true/false, "
+                        "Expected key amx_verify_after_set, rti_status_enabled, or expanded_log with true/false, "
                         "or amx_verify_timeout_ms with a number (100–5000)."
                     )
                     if want_html:
@@ -1081,6 +1113,12 @@ async def _handle_http_client(
                             f"rti_status_enabled is now {str(v).lower()} (UDP status heartbeat).",
                             "Takes effect immediately; no service restart needed.",
                         ]
+                    elif key == "expanded_log":
+                        v = snap.get("expanded_log")
+                        paras = [
+                            f"expanded_log is now {str(v).lower()} (logs RTI responses as RTI <- lines).",
+                            "Takes effect immediately; no service restart needed.",
+                        ]
                     else:
                         paras = [
                             f"Updated setting {key!r}.",
@@ -1098,6 +1136,7 @@ async def _handle_http_client(
                                     "amx_verify_after_set": snap.get("amx_verify_after_set"),
                                     "amx_verify_timeout_ms": snap.get("amx_verify_timeout_ms"),
                                     "rti_status_enabled": snap.get("rti_status_enabled"),
+                                    "expanded_log": snap.get("expanded_log"),
                                 },
                             ),
                         )
@@ -1106,13 +1145,14 @@ async def _handle_http_client(
                     body = (json.dumps(snap, indent=2) + "\n").encode("utf-8")
                     writer.write(_http_response("200 OK", "application/json", body))
                 LOG.info(
-                    "HTTP control [source=%s]: set %s=%r (verify_after_set=%s verify_timeout_ms=%s rti_status=%s)",
+                    "HTTP control [source=%s]: set %s=%r (verify_after_set=%s verify_timeout_ms=%s rti_status=%s expanded_log=%s)",
                     ctl_via,
                     key,
                     snap.get(key),
                     snap.get("amx_verify_after_set"),
                     snap.get("amx_verify_timeout_ms"),
                     snap.get("rti_status_enabled"),
+                    snap.get("expanded_log"),
                 )
                 return
 
@@ -1588,7 +1628,7 @@ async def _handle_http_client(
   </div>
 
   <div class="section-title">Controls</div>
-  <p class="subtle">Runtime only (no config file). Hover <span class="help-icon" style="cursor:default" title="Each control has a ? with full help.">?</span> for details. Results open in a short on-page message.</p>
+  <p class="subtle">Control changes are saved to config and survive restart/reboot. Hover <span class="help-icon" style="cursor:default" title="Each control has a ? with full help.">?</span> for details. Results open in a short on-page message.</p>
   <div class="card">
     <div class="row">
       <div><b>AMX verify after switch</b><span class="help-icon" title="When ON, after each route the translator asks each affected decoder for STREAM via AMX. Mismatches send rti_notify only; RTI still gets an immediate matrix ack.">?</span></div>
@@ -1610,6 +1650,13 @@ async def _handle_http_client(
       <div class="ctrl-actions">
         <code id="st_rti_status">{str(rt['rti_status_enabled']).lower()}</code>
         <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="rti_status_enabled" data-value="{'false' if rt['rti_status_enabled'] else 'true'}">Toggle</button>
+      </div>
+    </div>
+    <div class="row">
+      <div><b>Expanded log</b><span class="help-icon" title="When ON, logs each line sent back to RTI as 'RTI <- ...' in addition to incoming RTI lines. Runtime only.">?</span></div>
+      <div class="ctrl-actions">
+        <code id="st_expanded_log">{str(rt.get('expanded_log', False)).lower()}</code>
+        <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="expanded_log" data-value="{'false' if rt.get('expanded_log', False) else 'true'}">Toggle</button>
       </div>
     </div>
     <div class="row">
@@ -1695,6 +1742,8 @@ async def _handle_http_client(
           return 'AMX verify after switch is now ' + String(j.amx_verify_after_set).toLowerCase() + '. Applies immediately.';
         if (key === 'rti_status_enabled')
           return 'RTI status heartbeat is now ' + String(j.rti_status_enabled).toLowerCase() + '. Applies immediately.';
+        if (key === 'expanded_log')
+          return 'Expanded log is now ' + String(j.expanded_log).toLowerCase() + '. Applies immediately.';
         return 'Setting updated. Applies immediately.';
       }}
 
@@ -1737,6 +1786,11 @@ async def _handle_http_client(
                 const el = document.getElementById('st_rti_status');
                 if (el) el.textContent = String(j.rti_status_enabled).toLowerCase();
                 btn.setAttribute('data-value', j.rti_status_enabled ? 'false' : 'true');
+              }}
+              if (key === 'expanded_log') {{
+                const el = document.getElementById('st_expanded_log');
+                if (el) el.textContent = String(j.expanded_log).toLowerCase();
+                btn.setAttribute('data-value', j.expanded_log ? 'false' : 'true');
               }}
               return msg;
             }});
@@ -2807,6 +2861,7 @@ class RuntimeSettings:
         self.amx_verify_timeout_ms: int = cfg.amx_verify_timeout_ms
         self.amx_self_test_on_start: bool = cfg.amx_self_test_on_start
         self.rti_status_enabled: bool = cfg.rti_status_enabled
+        self.expanded_log: bool = cfg.expanded_log
         self.http_log_lines: int = cfg.http_status_log_lines
 
     async def snapshot(self) -> Dict[str, Any]:
@@ -2816,6 +2871,7 @@ class RuntimeSettings:
                 "amx_verify_timeout_ms": self.amx_verify_timeout_ms,
                 "amx_self_test_on_start": self.amx_self_test_on_start,
                 "rti_status_enabled": self.rti_status_enabled,
+                "expanded_log": self.expanded_log,
                 "http_log_lines": self.http_log_lines,
             }
 
@@ -2827,6 +2883,8 @@ class RuntimeSettings:
                 self.amx_self_test_on_start = value
             elif key == "rti_status_enabled":
                 self.rti_status_enabled = value
+            elif key == "expanded_log":
+                self.expanded_log = value
             else:
                 raise KeyError(key)
 
@@ -3317,10 +3375,15 @@ async def handle_client(
     session = NhdCtlSession()
     health.rti_clients += 1
 
+    def _write_rti_line(resp_line: str) -> None:
+        if runtime.expanded_log:
+            LOG.info("RTI <- %s", resp_line)
+        writer.write(_crlf(resp_line))
+
     # Optional: push "endpoint online" notifications on connect (helps some drivers).
     if cfg.send_startup_notify_endpoint_online:
         for name in _all_endpoint_aliases(cfg):
-            writer.write(_crlf(f"notify endpoint + {name}"))
+            _write_rti_line(f"notify endpoint + {name}")
         await writer.drain()
 
     try:
@@ -3405,7 +3468,7 @@ async def handle_client(
                     except Exception:
                         pass
 
-                writer.write(_crlf(resp if ok else "unknown command"))
+                _write_rti_line(resp if ok else "unknown command")
                 await writer.drain()
                 continue
 
@@ -3421,7 +3484,7 @@ async def handle_client(
                     tx_alias = None
                     if tx_obj is None:
                         if tx_token.upper() != "NULL":
-                            writer.write(_crlf("unknown command"))
+                            _write_rti_line("unknown command")
                             await writer.drain()
                             continue
                     else:
@@ -3431,7 +3494,7 @@ async def handle_client(
                     for tok in rx_tokens:
                         rx_obj = _lookup_rx(cfg, tok)
                         if rx_obj is None:
-                            writer.write(_crlf("unknown command"))
+                            _write_rti_line("unknown command")
                             await writer.drain()
                             break
                         rx_aliases.append(rx_obj.alias)
@@ -3482,7 +3545,7 @@ async def handle_client(
                                     "amx.breakaway.video", f"DT: ERROR AMX breakaway video route failed: {e}"
                                 )
 
-                        writer.write(_crlf(line))  # command mirror ack
+                        _write_rti_line(line)  # command mirror ack
                         await writer.drain()
                         continue
 
@@ -3496,7 +3559,7 @@ async def handle_client(
                         for tok in rx_tokens:
                             rx_obj = _lookup_rx(cfg, tok)
                             if rx_obj is None:
-                                writer.write(_crlf("unknown command"))
+                                _write_rti_line("unknown command")
                                 await writer.drain()
                                 break
                             rx_aliases_m.append(rx_obj.alias)
@@ -3509,7 +3572,7 @@ async def handle_client(
                     for resp_line in _format_matrix_info(
                         heading="matrix", mapping=state.video, rx_aliases=rx_aliases_m
                     ):
-                        writer.write(_crlf(resp_line))
+                        _write_rti_line(resp_line)
                     await writer.drain()
                     continue
                 # Examples:
@@ -3523,7 +3586,7 @@ async def handle_client(
                         for tok in rx_tokens:
                             rx_obj = _lookup_rx(cfg, tok)
                             if rx_obj is None:
-                                writer.write(_crlf("unknown command"))
+                                _write_rti_line("unknown command")
                                 await writer.drain()
                                 break
                             rx_aliases.append(rx_obj.alias)
@@ -3542,14 +3605,14 @@ async def handle_client(
                         "infrared": state.infrared,
                     }.get(kind)
                     if table is None:
-                        writer.write(_crlf("unknown command"))
+                        _write_rti_line("unknown command")
                         await writer.drain()
                         continue
 
                     for resp_line in _format_matrix_info(
                         heading=f"matrix {kind}", mapping=table, rx_aliases=rx_aliases
                     ):
-                        writer.write(_crlf(resp_line))
+                        _write_rti_line(resp_line)
                     await writer.drain()
                     continue
 
@@ -3557,10 +3620,10 @@ async def handle_client(
                 parts = line.split()
                 if len(parts) == 5 and parts[4].lower() in ("on", "off"):
                     session.alias_mode = parts[4].lower() == "on"
-                    writer.write(_crlf(line))  # command mirror ack
+                    _write_rti_line(line)  # command mirror ack
                 else:
                     _unknown_ctl_record(line)
-                    writer.write(_crlf("unknown command"))
+                    _write_rti_line("unknown command")
                 await writer.drain()
                 continue
 
@@ -3579,7 +3642,7 @@ async def handle_client(
                     hdmi_enabled = False
                 else:
                     _unknown_ctl_record(line)
-                    writer.write(_crlf("unknown command"))
+                    _write_rti_line("unknown command")
                     await writer.drain()
                     continue
 
@@ -3587,7 +3650,7 @@ async def handle_client(
                 for tok in parts[5:]:
                     rx_obj = _lookup_rx(cfg, tok)
                     if rx_obj is None:
-                        writer.write(_crlf("unknown command"))
+                        _write_rti_line("unknown command")
                         await writer.drain()
                         break
                     rx_aliases.append(rx_obj.alias)
@@ -3625,13 +3688,13 @@ async def handle_client(
                             + ", ".join(f"{rx_a}({ip})" for (rx_a, ip, _e) in failures[:3])
                             + (" ..." if len(failures) > 3 else ""),
                         )
-                    writer.write(_crlf(line))
+                    _write_rti_line(line)
                     await writer.drain()
                     continue
 
             if lower.startswith("config set "):
                 # For many config set commands, WyreStorm replies with command mirror.
-                writer.write(_crlf(line))
+                _write_rti_line(line)
                 await writer.drain()
                 continue
 
@@ -3640,7 +3703,7 @@ async def handle_client(
                 if _cg_out == ["unknown command"]:
                     _unknown_ctl_record(line)
                 for resp_line in _cg_out:
-                    writer.write(_crlf(resp_line))
+                    _write_rti_line(resp_line)
                 await writer.drain()
                 continue
 
@@ -3651,7 +3714,7 @@ async def handle_client(
                 if _vw_out == ["unknown command"]:
                     _unknown_ctl_record(line)
                 for resp_line in _vw_out:
-                    writer.write(_crlf(resp_line))
+                    _write_rti_line(resp_line)
                 await writer.drain()
                 continue
 
@@ -3660,7 +3723,7 @@ async def handle_client(
                 if _mv_out == ["unknown command"]:
                     _unknown_ctl_record(line)
                 for resp_line in _mv_out:
-                    writer.write(_crlf(resp_line))
+                    _write_rti_line(resp_line)
                 await writer.drain()
                 continue
 
@@ -3683,15 +3746,15 @@ async def handle_client(
             ):
                 # Some of these commands have defined response structure with success|failure.
                 if lower.startswith(("mscene active ", "mscene change ", "mscene set ", "mview set ", "mview set audio ")):
-                    writer.write(_crlf(_as_success(line)))
+                    _write_rti_line(_as_success(line))
                 else:
-                    writer.write(_crlf(line))
+                    _write_rti_line(line)
                 await writer.drain()
                 continue
 
             # Unknown command (no handler matched)
             _unknown_ctl_record(line)
-            writer.write(_crlf("unknown command"))
+            _write_rti_line("unknown command")
             await writer.drain()
 
     finally:
@@ -3835,6 +3898,7 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
                 runtime=runtime,
                 problems=problems,
                 started_at=started_at,
+                config_path=config_path,
             ),
             host=cfg.http_status_bind,
             port=cfg.http_status_port,

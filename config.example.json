@@ -44,7 +44,8 @@
     "set_retry_backoff_max_ms": 1200
   },
   "server": {
-    "send_startup_notify_endpoint_online": true
+    "send_startup_notify_endpoint_online": true,
+    "expanded_log": false
   },
   "rti_notify": {
     "enabled": false,
