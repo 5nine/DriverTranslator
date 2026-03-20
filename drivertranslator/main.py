@@ -330,7 +330,6 @@ class Config:
     amx_decoder_port: int
     amx_connect_timeout_ms: int
     amx_command_timeout_ms: int
-    send_startup_notify_endpoint_online: bool
     expanded_log: bool
     amx_dry_run: bool
     amx_persistent: bool
@@ -448,9 +447,6 @@ def load_config(path: str) -> Config:
         amx_decoder_port=_as_int(amx.get("decoder_port"), default=50002),
         amx_connect_timeout_ms=_as_int(amx.get("connect_timeout_ms"), default=1000),
         amx_command_timeout_ms=_as_int(amx.get("command_timeout_ms"), default=1500),
-        send_startup_notify_endpoint_online=bool(
-            server.get("send_startup_notify_endpoint_online", True)
-        ),
         expanded_log=_as_bool(server.get("expanded_log"), default=False),
         amx_dry_run=bool(amx.get("dry_run", False)),
         amx_persistent=bool(amx.get("persistent", False)),
@@ -3507,12 +3503,6 @@ async def handle_client(
         if runtime.expanded_log:
             LOG.info("RTI <- %s", resp_line)
         writer.write(_crlf(resp_line))
-
-    # Optional: push "endpoint online" notifications on connect (helps some drivers).
-    if cfg.send_startup_notify_endpoint_online:
-        for name in _all_endpoint_aliases(cfg):
-            _write_rti_line(f"notify endpoint + {name}")
-        await writer.drain()
 
     try:
         while True:

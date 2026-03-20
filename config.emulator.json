@@ -73,7 +73,6 @@
     "dry_run_offline_decoders": ["192.168.10.114"]
   },
   "server": {
-    "send_startup_notify_endpoint_online": true,
     "expanded_log": false
   }
 }
