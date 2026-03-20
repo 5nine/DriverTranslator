@@ -3071,6 +3071,16 @@ def _lookup_rx(cfg: Config, token: str) -> Optional[Rx]:
     return cfg.rx_by_alias.get(token) or cfg.rx_by_hostname.get(token)
 
 
+def _tx_alias_from_amx_stream(cfg: Config, stream_value: Optional[str]) -> Optional[str]:
+    s = (stream_value or "").strip()
+    if not s:
+        return None
+    for tx in cfg.tx_by_alias.values():
+        if str(tx.amx_stream) == s:
+            return tx.alias
+    return None
+
+
 def _all_endpoint_aliases(cfg: Config) -> List[str]:
     return list(cfg.tx_by_alias.keys()) + list(cfg.rx_by_alias.keys())
 
@@ -3675,6 +3685,17 @@ async def handle_client(
                             if rx_obj is not None:
                                 rx_aliases.append(rx_obj.alias)
                         state.set_all_media(tx_alias=tx_alias, rx_aliases=rx_aliases)
+                        # Prefer AMX-reported STREAM for touched RXs; if missing/unusable, fall back to NULL.
+                        if tx_alias is not None:
+                            failed_rx = {rx_a for (rx_a, _ip, _err) in failures}
+                            for rx_a in rx_aliases:
+                                if rx_a in failed_rx:
+                                    state.set_rx_all_media(rx_alias=rx_a, tx_alias=None)
+                                    continue
+                                amx_tx_alias = _tx_alias_from_amx_stream(
+                                    cfg, (status_by_rx.get(rx_a, {}).get("STREAM") or "")
+                                )
+                                state.set_rx_all_media(rx_alias=rx_a, tx_alias=amx_tx_alias)
 
                         # Optional AMX verification (problems-only)
                         if (not cfg.amx_dry_run) and runtime.amx_verify_after_set and tx_alias is not None:
@@ -3773,6 +3794,17 @@ async def handle_client(
                                         + ", ".join(f"{rx_a}({ip})" for (rx_a, ip, _e) in failures[:3])
                                         + (" ..." if len(failures) > 3 else ""),
                                     )
+
+                                # Prefer AMX-reported STREAM for touched RXs; if missing/unusable, fall back to NULL.
+                                failed_rx = {rx_a for (rx_a, _ip, _err) in failures}
+                                for rx_a in rx_aliases:
+                                    if rx_a in failed_rx:
+                                        state.set_breakaway(kind="video", tx_alias=None, rx_aliases=[rx_a])
+                                        continue
+                                    amx_tx_alias = _tx_alias_from_amx_stream(
+                                        cfg, (status_by_rx.get(rx_a, {}).get("STREAM") or "")
+                                    )
+                                    state.set_breakaway(kind="video", tx_alias=amx_tx_alias, rx_aliases=[rx_a])
 
                                 if (not cfg.amx_dry_run) and runtime.amx_verify_after_set:
                                     expected = str(tx_obj.amx_stream)
