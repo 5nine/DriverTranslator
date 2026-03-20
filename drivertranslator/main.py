@@ -1950,6 +1950,10 @@ class AmxClient:
         async with self._lock_for(decoder_ip):
             await self._set_stream_locked_with_retry(decoder_ip=decoder_ip, stream=stream)
 
+    async def set_hdmi_output(self, *, decoder_ip: str, enabled: bool) -> None:
+        async with self._lock_for(decoder_ip):
+            await self._set_hdmi_output_locked_with_retry(decoder_ip=decoder_ip, enabled=enabled)
+
     async def verify_stream(self, *, decoder_ip: str, expected_stream: int, timeout_ms: int) -> bool:
         # Stateless client: open a connection and query status
         try:
@@ -1980,6 +1984,13 @@ class AmxClient:
 
     async def _set_stream_locked(self, *, decoder_ip: str, stream: int) -> None:
         cmd = f"set:{stream}\r".encode("ascii")
+        await self._send_locked(decoder_ip=decoder_ip, cmd=cmd)
+
+    async def _set_hdmi_output_locked(self, *, decoder_ip: str, enabled: bool) -> None:
+        cmd = b"hdmiOn\r" if enabled else b"hdmiOff\r"
+        await self._send_locked(decoder_ip=decoder_ip, cmd=cmd)
+
+    async def _send_locked(self, *, decoder_ip: str, cmd: bytes) -> None:
         LOG.info("AMX -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
         try:
             reader, writer = await _open_connection(
@@ -2034,6 +2045,34 @@ class AmxClient:
         if last_exc is not None:
             raise last_exc
 
+    async def _set_hdmi_output_locked_with_retry(self, *, decoder_ip: str, enabled: bool) -> None:
+        last_exc: Optional[BaseException] = None
+        for attempt in range(1, self._set_retry_attempts + 1):
+            try:
+                await self._set_hdmi_output_locked(decoder_ip=decoder_ip, enabled=enabled)
+                return
+            except Exception as e:
+                last_exc = e
+                if attempt >= self._set_retry_attempts:
+                    raise
+                delay = _retry_delay_seconds(
+                    attempt_index=attempt,
+                    initial_ms=self._set_retry_backoff_initial_ms,
+                    max_ms=self._set_retry_backoff_max_ms,
+                )
+                if delay > 0:
+                    LOG.warning(
+                        "AMX set_hdmi_output retry %d/%d for %s (after error: %s). Sleeping %.3fs",
+                        attempt,
+                        self._set_retry_attempts,
+                        decoder_ip,
+                        e,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+        if last_exc is not None:
+            raise last_exc
+
 
 class DryRunAmxClient:
     def __init__(self, *, decoder_port: int, offline_decoders: Optional[List[str]] = None):
@@ -2055,6 +2094,13 @@ class DryRunAmxClient:
         if decoder_ip in self._offline:
             return False
         return True
+
+    async def set_hdmi_output(self, *, decoder_ip: str, enabled: bool) -> None:
+        if decoder_ip in self._offline:
+            LOG.error("AMX (dry-run) simulated OFFLINE decoder: %s:%d", decoder_ip, self._decoder_port)
+            raise ConnectionError(f"(dry-run) Simulated offline decoder: {decoder_ip}:{self._decoder_port}")
+        cmd = b"hdmiOn\r" if enabled else b"hdmiOff\r"
+        LOG.info("AMX (dry-run) -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
 
 
 class PersistentAmxClient:
@@ -2102,6 +2148,10 @@ class PersistentAmxClient:
     async def verify_stream(self, *, decoder_ip: str, expected_stream: int, timeout_ms: int) -> bool:
         worker = await self._get_worker(decoder_ip)
         return await worker.verify_stream(expected_stream=expected_stream, timeout_ms=timeout_ms)
+
+    async def set_hdmi_output(self, *, decoder_ip: str, enabled: bool) -> None:
+        worker = await self._get_worker(decoder_ip)
+        await worker.send_hdmi_output(enabled=enabled)
 
     async def _get_worker(self, decoder_ip: str) -> "_DecoderWorker":
         async with self._workers_lock:
@@ -2169,6 +2219,7 @@ class _DecoderWorker:
         self._writer: Optional[asyncio.StreamWriter] = None
         self._connected_evt = asyncio.Event()
         self.is_connected: bool = False
+        self._op_lock = asyncio.Lock()
 
     def start(self) -> None:
         if self._task is None:
@@ -2201,6 +2252,35 @@ class _DecoderWorker:
             return False
         parsed = _parse_amx_status(data)
         return parsed.get("STREAM") == str(expected_stream)
+
+    async def send_hdmi_output(self, *, enabled: bool) -> None:
+        payload = b"hdmiOn\r" if enabled else b"hdmiOff\r"
+        attempt = 1
+        while True:
+            try:
+                await self._send_raw(payload, log_label="AMX")
+                return
+            except Exception as e:
+                if attempt >= self._set_retry_attempts:
+                    raise
+                with contextlib.suppress(Exception):
+                    await self._reconnect()
+                delay = _retry_delay_seconds(
+                    attempt_index=attempt,
+                    initial_ms=self._set_retry_backoff_initial_ms,
+                    max_ms=self._set_retry_backoff_max_ms,
+                )
+                if delay > 0:
+                    LOG.warning(
+                        "AMX hdmi retry %d/%d for %s (after error: %s). Sleeping %.3fs",
+                        attempt,
+                        self._set_retry_attempts,
+                        self._decoder_ip,
+                        e,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                attempt += 1
 
     async def _run(self) -> None:
         keepalive_task: Optional[asyncio.Task[None]] = None
@@ -2288,28 +2368,30 @@ class _DecoderWorker:
                 await self._reconnect()
 
     async def _send_raw(self, payload: bytes, *, log_label: str) -> None:
-        await self._ensure_connected()
-        assert self._writer is not None
-        assert self._reader is not None
+        async with self._op_lock:
+            await self._ensure_connected()
+            assert self._writer is not None
+            assert self._reader is not None
 
-        LOG.info("%s -> %s:%d %r", log_label, self._decoder_ip, self._decoder_port, payload)
-        self._writer.write(payload)
-        await self._writer.drain()
+            LOG.info("%s -> %s:%d %r", log_label, self._decoder_ip, self._decoder_port, payload)
+            self._writer.write(payload)
+            await self._writer.drain()
 
-        # Best-effort read to keep RX buffers clear; don't block routing on large status packets.
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(self._reader.read(256), timeout=self._command_timeout)
+            # Best-effort read to keep RX buffers clear; don't block routing on large status packets.
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self._reader.read(256), timeout=self._command_timeout)
 
     async def _query_status(self, *, timeout_ms: int) -> bytes:
-        await self._ensure_connected()
-        assert self._writer is not None
-        assert self._reader is not None
-        self._writer.write(b"?\r")
-        await self._writer.drain()
-        try:
-            return await asyncio.wait_for(self._reader.read(4096), timeout=timeout_ms / 1000)
-        except Exception:
-            return b""
+        async with self._op_lock:
+            await self._ensure_connected()
+            assert self._writer is not None
+            assert self._reader is not None
+            self._writer.write(b"?\r")
+            await self._writer.drain()
+            try:
+                return await asyncio.wait_for(self._reader.read(4096), timeout=timeout_ms / 1000)
+            except Exception:
+                return b""
 
     async def _ensure_connected(self) -> None:
         if self._writer is not None and not self._writer.is_closing():
@@ -3068,6 +3150,79 @@ async def handle_client(
                     writer.write(_crlf("unknown command"))
                 await writer.drain()
                 continue
+
+            if (
+                len(parts) >= 6
+                and parts_lower[0] == "config"
+                and parts_lower[1] == "set"
+                and parts_lower[2] == "device"
+                and parts_lower[3] == "cec"
+            ):
+                cec_mode = parts_lower[4]
+                hdmi_enabled: Optional[bool] = None
+                if cec_mode in ("onetouchplay", "on"):
+                    hdmi_enabled = True
+                elif cec_mode in ("standby", "off"):
+                    hdmi_enabled = False
+                else:
+                    _unknown_ctl_record(line)
+                    writer.write(_crlf("unknown command"))
+                    await writer.drain()
+                    continue
+
+                rx_aliases: List[str] = []
+                for tok in parts[5:]:
+                    rx_obj = _lookup_rx(cfg, tok)
+                    if rx_obj is None:
+                        writer.write(_crlf("unknown command"))
+                        await writer.drain()
+                        break
+                    rx_aliases.append(rx_obj.alias)
+                else:
+                    LOG.info(
+                        "CEC translate: %s -> %s for %d RX(s): %s",
+                        cec_mode,
+                        "hdmiOn" if hdmi_enabled else "hdmiOff",
+                        len(rx_aliases),
+                        ", ".join(rx_aliases),
+                    )
+                    failures: List[Tuple[str, str, str]] = []
+                    try:
+                        results = await asyncio.gather(
+                            *(
+                                amx.set_hdmi_output(
+                                    decoder_ip=cfg.rx_by_alias[a].amx_decoder_ip,
+                                    enabled=hdmi_enabled,
+                                )
+                                for a in rx_aliases
+                            ),
+                            return_exceptions=True,
+                        )
+                        for a, res in zip(rx_aliases, results):
+                            if isinstance(res, BaseException):
+                                failures.append((a, cfg.rx_by_alias[a].amx_decoder_ip, str(res)))
+                                state.set_rx_online(a, False)
+                            else:
+                                state.set_rx_online(a, True)
+                    except Exception as e:
+                        LOG.exception("AMX HDMI control failed")
+                        await notifier.problem("amx.hdmi", f"DT: ERROR AMX HDMI control failed: {e}")
+
+                    if failures:
+                        for (rx_a, ip, err) in failures:
+                            await notifier.problem(
+                                f"amx.hdmi.{ip}",
+                                f"DT: ERROR AMX HDMI control failed: {rx_a} ({ip}): {err}",
+                            )
+                        await notifier.problem(
+                            "amx.hdmi.partial",
+                            "DT: ERROR AMX HDMI control failed on: "
+                            + ", ".join(f"{rx_a}({ip})" for (rx_a, ip, _e) in failures[:3])
+                            + (" ..." if len(failures) > 3 else ""),
+                        )
+                    writer.write(_crlf(line))
+                    await writer.drain()
+                    continue
 
             if lower.startswith("config set "):
                 # For many config set commands, WyreStorm replies with command mirror.
