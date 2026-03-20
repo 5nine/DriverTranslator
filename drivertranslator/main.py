@@ -3436,11 +3436,11 @@ def _format_matrix_info(
     mapping: Dict[str, Optional[str]],
     rx_aliases: List[str],
 ) -> List[str]:
-    tokens: List[str] = []
+    lines: List[str] = [f"{heading} information:"]
     for rx in rx_aliases:
         tx = mapping.get(rx)
-        tokens.append(f"{(tx if tx is not None else 'NULL')} {rx}")
-    return [f"{heading} information: " + " ".join(tokens)]
+        lines.append(f"{(tx if tx is not None else 'NULL')} {rx}")
+    return lines
 
 
 def _as_success(line: str) -> str:
@@ -3525,6 +3525,10 @@ async def handle_client(
                 continue
 
             LOG.info("RTI -> %s", line)
+            if runtime.expanded_log:
+                # Make whitespace and CR/LF visible for protocol-parity troubleshooting.
+                visible = line.replace(" ", "·").replace("\t", "\\t")
+                LOG.info("RTI -> debug visible='%s' raw=%r", visible, raw)
             lower = line.lower()
             parts = line.split()
             parts_lower = [p.lower() for p in parts]
