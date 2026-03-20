@@ -3436,10 +3436,17 @@ def _format_matrix_info(
     mapping: Dict[str, Optional[str]],
     rx_aliases: List[str],
 ) -> List[str]:
-    lines: List[str] = [f"{heading} information:"]
+    # Match observed RTI spacing style:
+    # - double spaces after "matrix" in heading lines
+    # - triple spaces between source and sink tokens
+    if heading.startswith("matrix "):
+        heading_wire = heading.replace("matrix ", "matrix  ", 1)
+    else:
+        heading_wire = heading
+    lines: List[str] = [f"{heading_wire} information:"]
     for rx in rx_aliases:
         tx = mapping.get(rx)
-        lines.append(f"{(tx if tx is not None else 'NULL')} {rx}")
+        lines.append(f"{(tx if tx is not None else 'NULL')}   {rx}")
     return lines
 
 
