@@ -2066,6 +2066,17 @@ class AmxClient:
                 timeout_ms=timeout_ms,
             )
 
+    async def send_command_with_status(
+        self, *, decoder_ip: str, command: str, timeout_ms: int
+    ) -> Dict[str, str]:
+        payload = command if command.endswith("\r") else (command + "\r")
+        async with self._lock_for(decoder_ip):
+            return await self._send_and_read_status_locked(
+                decoder_ip=decoder_ip,
+                cmd=payload.encode("ascii"),
+                timeout_ms=timeout_ms,
+            )
+
     async def verify_stream(self, *, decoder_ip: str, expected_stream: int, timeout_ms: int) -> bool:
         # Stateless client: open a connection and query status
         try:
@@ -2137,6 +2148,12 @@ class AmxClient:
     async def _send_and_query_hdmi_locked(
         self, *, decoder_ip: str, cmd: bytes, timeout_ms: int
     ) -> Optional[bool]:
+        parsed = await self._send_and_read_status_locked(decoder_ip=decoder_ip, cmd=cmd, timeout_ms=timeout_ms)
+        return _hdmi_enabled_from_status_fields(parsed)
+
+    async def _send_and_read_status_locked(
+        self, *, decoder_ip: str, cmd: bytes, timeout_ms: int
+    ) -> Dict[str, str]:
         LOG.info("AMX -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
         try:
             reader, writer = await _open_connection(
@@ -2150,22 +2167,11 @@ class AmxClient:
         try:
             writer.write(cmd)
             await writer.drain()
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(reader.read(256), timeout=self._command_timeout)
-
-            writer.write(b"?\r")
-            await writer.drain()
             try:
                 data = await asyncio.wait_for(reader.read(4096), timeout=timeout_ms / 1000)
             except Exception:
-                return None
-            parsed = _parse_amx_status(data)
-            hdmi_off = (parsed.get("HDMIOFF") or "").strip().lower()
-            if hdmi_off == "on":
-                return False
-            if hdmi_off == "off":
-                return True
-            return None
+                return {}
+            return _parse_amx_status(data)
         finally:
             writer.close()
             with contextlib.suppress(Exception):
@@ -2382,6 +2388,13 @@ class DryRunAmxClient:
         await self.send_command(decoder_ip=decoder_ip, command=command)
         return await self.get_hdmi_output(decoder_ip=decoder_ip, timeout_ms=timeout_ms)
 
+    async def send_command_with_status(
+        self, *, decoder_ip: str, command: str, timeout_ms: int
+    ) -> Dict[str, str]:
+        _ = timeout_ms
+        await self.send_command(decoder_ip=decoder_ip, command=command)
+        return await self.get_status_fields(decoder_ip=decoder_ip, timeout_ms=timeout_ms)
+
 
 class PersistentAmxClient:
     """
@@ -2446,6 +2459,12 @@ class PersistentAmxClient:
     ) -> Optional[bool]:
         worker = await self._get_worker(decoder_ip)
         return await worker.send_command_and_get_hdmi_output(command=command, timeout_ms=timeout_ms)
+
+    async def send_command_with_status(
+        self, *, decoder_ip: str, command: str, timeout_ms: int
+    ) -> Dict[str, str]:
+        worker = await self._get_worker(decoder_ip)
+        return await worker.send_command_with_status(command=command, timeout_ms=timeout_ms)
 
     async def _get_worker(self, decoder_ip: str) -> "_DecoderWorker":
         async with self._workers_lock:
@@ -2596,6 +2615,10 @@ class _DecoderWorker:
     async def send_command_and_get_hdmi_output(
         self, *, command: str, timeout_ms: int
     ) -> Optional[bool]:
+        parsed = await self.send_command_with_status(command=command, timeout_ms=timeout_ms)
+        return _hdmi_enabled_from_status_fields(parsed)
+
+    async def send_command_with_status(self, *, command: str, timeout_ms: int) -> Dict[str, str]:
         payload = (command if command.endswith("\r") else (command + "\r")).encode("ascii")
         async with self._op_lock:
             await self._ensure_connected()
@@ -2604,21 +2627,11 @@ class _DecoderWorker:
             LOG.info("AMX -> %s:%d %r", self._decoder_ip, self._decoder_port, payload)
             self._writer.write(payload)
             await self._writer.drain()
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(self._reader.read(256), timeout=self._command_timeout)
-            self._writer.write(b"?\r")
-            await self._writer.drain()
             try:
                 data = await asyncio.wait_for(self._reader.read(4096), timeout=timeout_ms / 1000)
             except Exception:
-                return None
-        parsed = _parse_amx_status(data)
-        hdmi_off = (parsed.get("HDMIOFF") or "").strip().lower()
-        if hdmi_off == "on":
-            return False
-        if hdmi_off == "off":
-            return True
-        return None
+                return {}
+        return _parse_amx_status(data)
 
     async def _run(self) -> None:
         keepalive_task: Optional[asyncio.Task[None]] = None
@@ -3134,13 +3147,13 @@ def _handle_config_get(cfg: Config, session: NhdCtlSession, state: NhdState, cmd
 
 async def _handle_matrix_set(
     cfg: Config, amx: Any, state: NhdState, cmd: str, timeout_ms: int
-) -> Tuple[bool, str, List[Tuple[str, str, str]]]:
+) -> Tuple[bool, str, List[Tuple[str, str, str]], Dict[str, Dict[str, str]]]:
     # cmd: "matrix set <TX> <RX1> <RX2> ... <RXn>"
     parts = cmd.split()
     if len(parts) < 4:
-        return False, "unknown command", []
+        return False, "unknown command", [], {}
     if parts[0].lower() != "matrix" or parts[1].lower() != "set":
-        return False, "unknown command", []
+        return False, "unknown command", [], {}
 
     tx_token = parts[2]
     rx_tokens = parts[3:]
@@ -3151,18 +3164,19 @@ async def _handle_matrix_set(
         if tx_token.upper() == "NULL":
             tx = None
         else:
-            return False, "unknown command", []
+            return False, "unknown command", [], {}
 
     rxs: List[Rx] = []
     for token in rx_tokens:
         rx = _lookup_rx(cfg, token)
         if rx is None:
-            return False, "unknown command", []
+            return False, "unknown command", [], {}
         rxs.append(rx)
 
     failures: List[Tuple[str, str, str]] = []
+    status_by_rx: Dict[str, Dict[str, str]] = {}
     if tx is not None:
-        failures = await _apply_amx_command_to_rx_aliases(
+        failures, status_by_rx = await _apply_amx_command_to_rx_aliases(
             cfg=cfg,
             amx=amx,
             state=state,
@@ -3174,7 +3188,7 @@ async def _handle_matrix_set(
         LOG.info("AMX routing skipped: NULL assignment requested")
 
     # WyreStorm ack is a "command mirror"
-    return True, cmd, failures
+    return True, cmd, failures, status_by_rx
 
 
 async def _refresh_hdmi_outputs(*, cfg: Config, amx: Any, state: NhdState, timeout_ms: int) -> None:
@@ -3240,14 +3254,15 @@ async def _apply_amx_command_to_rx_aliases(
     rx_aliases: List[str],
     command: str,
     timeout_ms: int,
-) -> List[Tuple[str, str, str]]:
+) -> Tuple[List[Tuple[str, str, str]], Dict[str, Dict[str, str]]]:
     if not rx_aliases:
-        return []
+        return [], {}
     failures: List[Tuple[str, str, str]] = []
-    if hasattr(amx, "send_command_and_get_hdmi_output"):
+    status_by_rx: Dict[str, Dict[str, str]] = {}
+    if hasattr(amx, "send_command_with_status"):
         results = await asyncio.gather(
             *(
-                amx.send_command_and_get_hdmi_output(
+                amx.send_command_with_status(
                     decoder_ip=cfg.rx_by_alias[a].amx_decoder_ip,
                     command=command,
                     timeout_ms=timeout_ms,
@@ -3263,8 +3278,10 @@ async def _apply_amx_command_to_rx_aliases(
                 state.set_rx_hdmi_output(a, None)
             else:
                 state.set_rx_online(a, True)
-                state.set_rx_hdmi_output(a, res if isinstance(res, bool) else None)
-        return failures
+                fields = res if isinstance(res, dict) else {}
+                status_by_rx[a] = fields
+                state.set_rx_hdmi_output(a, _hdmi_enabled_from_status_fields(fields))
+        return failures, status_by_rx
 
     if hasattr(amx, "send_command"):
         results = await asyncio.gather(
@@ -3284,17 +3301,7 @@ async def _apply_amx_command_to_rx_aliases(
                 state.set_rx_hdmi_output(a, None)
             else:
                 state.set_rx_online(a, True)
-        if rx_aliases:
-            asyncio.create_task(
-                _refresh_hdmi_outputs_for_aliases(
-                    cfg=cfg,
-                    amx=amx,
-                    state=state,
-                    timeout_ms=max(200, min(1200, int(timeout_ms))),
-                    rx_aliases=rx_aliases,
-                )
-            )
-    return failures
+    return failures, status_by_rx
 
 
 def _format_matrix_info(
@@ -3407,8 +3414,11 @@ async def handle_client(
                 ok = False
                 resp = "unknown command"
                 failures: List[Tuple[str, str, str]] = []
+                status_by_rx: Dict[str, Dict[str, str]] = {}
                 try:
-                    ok, resp, failures = await _handle_matrix_set(cfg, amx, state, line, runtime.amx_verify_timeout_ms)
+                    ok, resp, failures, status_by_rx = await _handle_matrix_set(
+                        cfg, amx, state, line, runtime.amx_verify_timeout_ms
+                    )
                     if ok:
                         tx_token = parts[2]
                         tx_alias: Optional[str]
@@ -3428,16 +3438,12 @@ async def handle_client(
                         # Optional AMX verification (problems-only)
                         if (not cfg.amx_dry_run) and runtime.amx_verify_after_set and tx_alias is not None:
                             tx_obj2 = _lookup_tx(cfg, tx_alias)
-                            expected = tx_obj2.amx_stream if tx_obj2 is not None else None
+                            expected = str(tx_obj2.amx_stream) if tx_obj2 is not None else None
                             if expected:
                                 for rx_a in rx_aliases:
                                     ip = cfg.rx_by_alias[rx_a].amx_decoder_ip
-                                    ok_v = await amx.verify_stream(
-                                        decoder_ip=ip,
-                                        expected_stream=expected,
-                                        timeout_ms=runtime.amx_verify_timeout_ms,
-                                    )
-                                    if not ok_v:
+                                    got = (status_by_rx.get(rx_a, {}).get("STREAM") or "").strip()
+                                    if got != expected:
                                         await notifier.problem(
                                             f"amx.verify.{ip}",
                                             f"DT: ERROR AMX verify failed: {rx_a} expected STREAM {expected}",
@@ -3504,7 +3510,7 @@ async def handle_client(
                         # Only video breakaway affects AMX in our model
                         if kind == "video" and tx_obj is not None:
                             try:
-                                failures = await _apply_amx_command_to_rx_aliases(
+                                failures, status_by_rx = await _apply_amx_command_to_rx_aliases(
                                     cfg=cfg,
                                     amx=amx,
                                     state=state,
@@ -3526,15 +3532,11 @@ async def handle_client(
                                     )
 
                                 if (not cfg.amx_dry_run) and runtime.amx_verify_after_set:
-                                    expected = tx_obj.amx_stream
+                                    expected = str(tx_obj.amx_stream)
                                     for rx_a in rx_aliases:
+                                        got = (status_by_rx.get(rx_a, {}).get("STREAM") or "").strip()
                                         ip = cfg.rx_by_alias[rx_a].amx_decoder_ip
-                                        ok_v = await amx.verify_stream(
-                                            decoder_ip=ip,
-                                            expected_stream=expected,
-                                            timeout_ms=runtime.amx_verify_timeout_ms,
-                                        )
-                                        if not ok_v:
+                                        if got != expected:
                                             await notifier.problem(
                                                 f"amx.verify.{ip}",
                                                 f"DT: ERROR AMX verify failed: {rx_a} expected STREAM {expected}",
@@ -3663,7 +3665,7 @@ async def handle_client(
                         ", ".join(rx_aliases),
                     )
                     try:
-                        failures = await _apply_amx_command_to_rx_aliases(
+                        failures, _status_by_rx = await _apply_amx_command_to_rx_aliases(
                             cfg=cfg,
                             amx=amx,
                             state=state,
