@@ -3750,6 +3750,23 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         )
 
     state = NhdState(cfg)
+    if cfg.amx_dry_run:
+        # Dry-run baseline: emulate RX status as STREAM:1 and HDMI enabled.
+        tx_stream1_alias: Optional[str] = None
+        for tx in cfg.tx_by_alias.values():
+            if int(tx.amx_stream) == 1:
+                tx_stream1_alias = tx.alias
+                break
+        if tx_stream1_alias is not None:
+            for rx in cfg.rx_by_alias.values():
+                state.set_rx_all_media(rx_alias=rx.alias, tx_alias=tx_stream1_alias)
+                state.set_rx_hdmi_output(rx.alias, True)
+            LOG.info(
+                "Dry-run startup seed: set all RX routes to %s (amx_stream=1), HDMI output ON",
+                tx_stream1_alias,
+            )
+        else:
+            LOG.warning("Dry-run startup seed skipped: no TX with amx_stream=1 in config")
     if cfg.amx_dry_run and cfg.amx_dry_run_offline_decoders:
         offline = {x.strip() for x in cfg.amx_dry_run_offline_decoders if str(x).strip()}
         for rx in cfg.rx_by_alias.values():
