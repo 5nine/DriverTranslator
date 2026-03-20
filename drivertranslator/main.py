@@ -120,6 +120,7 @@ def _unknown_ctl_record(line: str) -> None:
 
 def _persist_runtime_setting_to_config(*, config_path: str, key: str, value: Any) -> None:
     mapping: Dict[str, Tuple[str, str]] = {
+        "amx_dry_run": ("amx", "dry_run"),
         "amx_verify_after_set": ("amx", "verify_after_set"),
         "amx_verify_timeout_ms": ("amx", "verify_timeout_ms"),
         "rti_status_enabled": ("rti_status", "enabled"),
@@ -1087,8 +1088,8 @@ async def _handle_http_client(
                         value,
                     )
                     bad_msg = (
-                        "Expected key amx_verify_after_set, rti_status_enabled, or expanded_log with true/false, "
-                        "or amx_verify_timeout_ms with a number (100–5000)."
+                        "Expected key amx_dry_run, amx_verify_after_set, rti_status_enabled, or expanded_log with true/false, "
+                        "or amx_verify_timeout_ms with a number (100-5000)."
                     )
                     if want_html:
                         writer.write(
@@ -1111,6 +1112,12 @@ async def _handle_http_client(
                         paras = [
                             f"amx_verify_timeout_ms is now {snap.get('amx_verify_timeout_ms')} ms.",
                             "Takes effect immediately; no service restart needed.",
+                        ]
+                    elif key == "amx_dry_run":
+                        v = snap.get("amx_dry_run")
+                        paras = [
+                            f"amx_dry_run is now {str(v).lower()}.",
+                            "Saved to config. Restart DriverTranslator to apply this mode change.",
                         ]
                     elif key == "amx_verify_after_set":
                         v = snap.get("amx_verify_after_set")
@@ -1144,6 +1151,7 @@ async def _handle_http_client(
                                 headline="Saved",
                                 paragraphs=paras,
                                 pre_json={
+                                    "amx_dry_run": snap.get("amx_dry_run"),
                                     "amx_verify_after_set": snap.get("amx_verify_after_set"),
                                     "amx_verify_timeout_ms": snap.get("amx_verify_timeout_ms"),
                                     "rti_status_enabled": snap.get("rti_status_enabled"),
@@ -1156,10 +1164,11 @@ async def _handle_http_client(
                     body = (json.dumps(snap, indent=2) + "\n").encode("utf-8")
                     writer.write(_http_response("200 OK", "application/json", body))
                 LOG.info(
-                    "HTTP control [source=%s]: set %s=%r (verify_after_set=%s verify_timeout_ms=%s rti_status=%s expanded_log=%s)",
+                    "HTTP control [source=%s]: set %s=%r (dry_run=%s verify_after_set=%s verify_timeout_ms=%s rti_status=%s expanded_log=%s)",
                     ctl_via,
                     key,
                     snap.get(key),
+                    snap.get("amx_dry_run"),
                     snap.get("amx_verify_after_set"),
                     snap.get("amx_verify_timeout_ms"),
                     snap.get("rti_status_enabled"),
@@ -1642,6 +1651,13 @@ async def _handle_http_client(
   <p class="subtle">Control changes are saved to config and survive restart/reboot. Hover <span class="help-icon" style="cursor:default" title="Each control has a ? with full help.">?</span> for details. Results open in a short on-page message.</p>
   <div class="card">
     <div class="row">
+      <div><b>AMX dry-run mode</b><span class="help-icon" title="When ON, no AMX TCP connections are made and decoder state is simulated. Saved to config; restart required to apply.">?</span></div>
+      <div class="ctrl-actions">
+        <code id="st_amx_dry_run">{str(rt.get('amx_dry_run', cfg.amx_dry_run)).lower()}</code>
+        <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="amx_dry_run" data-value="{'false' if rt.get('amx_dry_run', cfg.amx_dry_run) else 'true'}">Toggle</button>
+      </div>
+    </div>
+    <div class="row">
       <div><b>AMX verify after switch</b><span class="help-icon" title="When ON, after each route the translator asks each affected decoder for STREAM via AMX. Mismatches send rti_notify only; RTI still gets an immediate matrix ack.">?</span></div>
       <div class="ctrl-actions">
         <code id="st_amx_verify">{str(rt['amx_verify_after_set']).lower()}</code>
@@ -1747,6 +1763,8 @@ async def _handle_http_client(
       }}
 
       function setSavedMessage(key, j) {{
+        if (key === 'amx_dry_run')
+          return 'AMX dry-run mode is now ' + String(j.amx_dry_run).toLowerCase() + '. Saved to config; restart DriverTranslator to apply.';
         if (key === 'amx_verify_timeout_ms')
           return 'Verify timeout is now ' + j.amx_verify_timeout_ms + ' ms. Applies immediately; no restart.';
         if (key === 'amx_verify_after_set')
@@ -1792,6 +1810,11 @@ async def _handle_http_client(
                 const el = document.getElementById('st_amx_verify');
                 if (el) el.textContent = String(j.amx_verify_after_set).toLowerCase();
                 btn.setAttribute('data-value', j.amx_verify_after_set ? 'false' : 'true');
+              }}
+              if (key === 'amx_dry_run') {{
+                const el = document.getElementById('st_amx_dry_run');
+                if (el) el.textContent = String(j.amx_dry_run).toLowerCase();
+                btn.setAttribute('data-value', j.amx_dry_run ? 'false' : 'true');
               }}
               if (key === 'rti_status_enabled') {{
                 const el = document.getElementById('st_rti_status');
@@ -2881,6 +2904,7 @@ class ProblemState:
 class RuntimeSettings:
     def __init__(self, cfg: Config) -> None:
         self._lock = asyncio.Lock()
+        self.amx_dry_run: bool = cfg.amx_dry_run
         self.amx_verify_after_set: bool = cfg.amx_verify_after_set
         self.amx_verify_timeout_ms: int = cfg.amx_verify_timeout_ms
         self.amx_self_test_on_start: bool = cfg.amx_self_test_on_start
@@ -2891,6 +2915,7 @@ class RuntimeSettings:
     async def snapshot(self) -> Dict[str, Any]:
         async with self._lock:
             return {
+                "amx_dry_run": self.amx_dry_run,
                 "amx_verify_after_set": self.amx_verify_after_set,
                 "amx_verify_timeout_ms": self.amx_verify_timeout_ms,
                 "amx_self_test_on_start": self.amx_self_test_on_start,
@@ -2901,7 +2926,9 @@ class RuntimeSettings:
 
     async def set_bool(self, key: str, value: bool) -> None:
         async with self._lock:
-            if key == "amx_verify_after_set":
+            if key == "amx_dry_run":
+                self.amx_dry_run = value
+            elif key == "amx_verify_after_set":
                 self.amx_verify_after_set = value
             elif key == "amx_self_test_on_start":
                 self.amx_self_test_on_start = value
