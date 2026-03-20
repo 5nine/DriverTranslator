@@ -169,6 +169,12 @@ def _unknown_ctl_page_text() -> str:
     return "\n".join(lines)
 
 
+def _ctl_json(v: Any) -> str:
+    s = json.dumps(v, separators=(", ", " : "), ensure_ascii=False)
+    s = s.replace("{", "{ ").replace("}", " }").replace("[", "[ ").replace("]", " ]")
+    return s
+
+
 # Short-lived tokens so the status page can call /control/* via fetch() (browsers do not send Basic Auth on fetch).
 _HTTP_UI_SESS_TTL_SEC = 30 * 60
 _HTTP_UI_SESS: Dict[str, float] = {}
@@ -3029,18 +3035,132 @@ def _device_status_rx_dict(rx: Rx, state: NhdState) -> Dict[str, str]:
 def _handle_config_get(cfg: Config, session: NhdCtlSession, state: NhdState, cmd: str) -> List[str]:
     parts = cmd.split()
     if parts[:3] == ["config", "get", "version"]:
-        return [
-            f"API version: v{cfg.nhd.api}",
-            f"System version: v{cfg.nhd.web}(v{cfg.nhd.core})",
-        ]
+        return [f"API version: v{cfg.nhd.api} System version: v{cfg.nhd.web}(v{cfg.nhd.core})"]
 
     if parts[:3] == ["config", "get", "ipsetting"]:
         ip = cfg.nhd.ipsetting
-        return [f"ipsetting is: ip4addr {ip['ip4addr']} netmask {ip['netmask']} gateway {ip['gateway']}"]
+        return [f"ipsetting is:static {ip['ip4addr']} {ip['netmask']} {ip['gateway']}"]
 
     if parts[:3] == ["config", "get", "ipsetting2"]:
         ip = cfg.nhd.ipsetting2
-        return [f"ipsetting2 is: ip4addr {ip['ip4addr']} netmask {ip['netmask']} gateway {ip['gateway']}"]
+        return [f"ipsetting2 is:static {ip['ip4addr']} {ip['netmask']} {ip['gateway']}"]
+
+    if parts[:3] == ["config", "get", "newip4addr"]:
+        ip = cfg.nhd.ipsetting
+        return [f"ipsetting is:static {ip['ip4addr']} {ip['netmask']} {ip['gateway']}"]
+
+    if parts[:3] == ["config", "get", "newip4addr2"]:
+        ip = cfg.nhd.ipsetting2
+        return [f"ipsetting2 is:static {ip['ip4addr']} {ip['netmask']} {ip['gateway']}"]
+
+    if parts[:3] == ["config", "get", "telnet"] and len(parts) >= 4 and parts[3] == "alias":
+        return ["telnet alias is on" if session.alias_mode else "telnet alias is off"]
+
+    if parts[:3] == ["config", "get", "rs-232"] and len(parts) >= 4 and parts[3] == "alias":
+        return ["rs-232 alias is on" if session.alias_mode else "rs-232 alias is off"]
+
+    if parts[:3] == ["config", "get", "htmlLog"]:
+        return ["htmlLog true"]
+
+    if parts[:4] == ["config", "get", "userList"]:
+        return ["userList null null null null null"]
+
+    if parts[:4] == ["config", "get", "dnsserver"] and len(parts) >= 5:
+        if parts[4] == "ip4addr":
+            return ["dns server ip4addr is: 8.8.8.8"]
+        if parts[4] == "ip4addr2":
+            return ["dns server ip4addr2 is: 1.1.1.1"]
+
+    if parts[:4] == ["config", "get", "controller", "info"]:
+        info = {
+            "hostname_av": cfg.nhd.ipsetting.get("ip4addr", "NHD-CTL-AV"),
+            "hostname_ctl": cfg.nhd.ipsetting2.get("ip4addr", "NHD-CTL-CTL"),
+            "ip_av": cfg.nhd.ipsetting.get("ip4addr", "0.0.0.0"),
+            "ip_ctl": cfg.nhd.ipsetting2.get("ip4addr", "0.0.0.0"),
+            "mac_av": "00:00:00:00:00:00",
+            "mac_ctl": "00:00:00:00:00:01",
+            "serialNumber": "00000000000000",
+            "version": f"V{cfg.nhd.web}",
+        }
+        return ["controller info: " + _ctl_json([info])]
+
+    if parts[:4] == ["config", "get", "service", "capability"] and len(parts) >= 5:
+        cap = parts[4]
+        val = {
+            "service_https": "false",
+            "service_http": "true",
+            "service_sshapi": "true",
+            "service_telnettlsapi": "true",
+            "service_telnetapi": "true",
+        }.get(cap)
+        if val is not None:
+            return [f"config get service capability {cap} {val}"]
+
+    if parts[:4] == ["config", "get", "system", "sshservice"]:
+        return ["system sshservice is on"]
+
+    if parts[:5] == ["config", "get", "system", "service", "ssh_api"] and len(parts) >= 7 and parts[6] == "port":
+        return ["system service ssh_api port is 10022"]
+    if parts[:5] == ["config", "get", "system", "service", "telnettls_api"] and len(parts) >= 7 and parts[6] == "port":
+        return ["system service telnettls_api port is 992"]
+    if parts[:5] == ["config", "get", "system", "service", "telnet_api"] and len(parts) >= 7 and parts[6] == "port":
+        return ["system service telnet_api port is 23"]
+
+    if parts[:4] == ["config", "get", "system", "realtime"]:
+        return [f"RealTime:{time.strftime('%a,%d-%m-%Y,%H:%M:%S', time.gmtime())}"]
+    if parts[:4] == ["config", "get", "system", "ntpserverstatus"]:
+        return ["system ntpserverstatus is unreachable"]
+    if parts[:4] == ["config", "get", "system", "ntpzone"]:
+        return ["system ntpzone is Etc UTC"]
+    if parts[:4] == ["config", "get", "system", "ntpenable"]:
+        return ["system ntpenable is off"]
+    if parts[:4] == ["config", "get", "system", "ntpserver"]:
+        return ["system ntpserver is 0.pool.ntp.org"]
+    if parts[:4] == ["config", "get", "system", "web_logout_time"]:
+        return ["system web_logout_time is 1440"]
+    if parts[:4] == ["config", "get", "system", "preview"] and len(parts) >= 6 and parts[5] == "fps":
+        return ["system preview fps: 0"]
+    if parts[:4] == ["config", "get", "system", "lcd"]:
+        return ["system lcd:ipversion"]
+    if parts[:4] == ["config", "get", "system", "xyte_setting"]:
+        return ["xyte_setting info: " + _ctl_json({"xyte_setting": {"enable": True, "register_url": "https://entry.xyte.io"}})]
+    if parts[:4] == ["config", "get", "system", "xyte_status"]:
+        return ["xyte status: " + _ctl_json({"cloud_status": "connected", "register_status": "registered"})]
+    if parts[:4] == ["config", "get", "system", "802_1x"]:
+        return [
+            "802_1x info: "
+            + _ctl_json(
+                [
+                    {
+                        "ieee802_1x_ca_mode": "default",
+                        "ieee802_1x_enable": "false",
+                        "ieee802_1x_mode": "",
+                        "ieee802_1x_mschapv2_password": "",
+                        "ieee802_1x_mschapv2_user": "",
+                        "ieee802_1x_tls_private_key_password": "",
+                        "ieee802_1x_tls_user": "",
+                    }
+                ]
+            )
+        ]
+    if parts[:4] == ["config", "get", "system", "ldap"]:
+        return [
+            "ldap info: "
+            + _ctl_json(
+                [
+                    {
+                        "ldap_attr": "",
+                        "ldap_base_dn": "",
+                        "ldap_bind_dn": "",
+                        "ldap_enable": "false",
+                        "ldap_mode": "dn",
+                        "ldap_password": "",
+                        "ldap_uid": "",
+                        "ldap_uri": "",
+                    }
+                ]
+            )
+        ]
 
     if parts[:3] == ["config", "get", "devicelist"]:
         # Doc: only online devices returned. We treat all configured devices as online.
@@ -3067,34 +3187,51 @@ def _handle_config_get(cfg: Config, session: NhdCtlSession, state: NhdState, cmd
         return ["unknown command"]
 
     if parts[:3] == ["config", "get", "devicejsonstring"]:
-        # Minimal structure; real CTL returns much more (Appendix A).
         devices: List[Dict[str, Any]] = []
         for t in cfg.tx_by_alias.values():
-            devices.append({"type": "TX", "alias": t.alias, "hostname": t.hostname})
+            devices.append(
+                {
+                    "aliasName": t.alias,
+                    "deviceType": "Transmitter",
+                    "trueName": t.hostname,
+                    "name": t.hostname,
+                    "online": True,
+                }
+            )
         for r in cfg.rx_by_alias.values():
-            devices.append({"type": "RX", "alias": r.alias, "hostname": r.hostname})
-        return ["device json string: " + json.dumps({"devices": devices}, separators=(",", ":"))]
+            tx_alias = state.video.get(r.alias)
+            tx_obj = cfg.tx_by_alias.get(tx_alias) if tx_alias else None
+            devices.append(
+                {
+                    "aliasName": r.alias,
+                    "deviceType": "Receiver",
+                    "trueName": r.hostname,
+                    "name": r.hostname,
+                    "txName": tx_obj.hostname if tx_obj is not None else "NULL",
+                    "online": bool(state.rx_online.get(r.alias, True)),
+                }
+            )
+        return ["device json string:" + _ctl_json(devices)]
 
     if parts[:4] == ["config", "get", "device", "info"]:
-        # `config get device info` (all), or `config get device info <TX|RX>`
         devices: List[Dict[str, Any]] = []
         if len(parts) == 4:
             for t in cfg.tx_by_alias.values():
-                devices.append({"alias": t.alias, "hostname": t.hostname, "role": "TX"})
+                devices.append({"aliasname": t.alias, "name": t.hostname, "devicetype": "Transmitter"})
             for r in cfg.rx_by_alias.values():
-                devices.append({"alias": r.alias, "hostname": r.hostname, "role": "RX"})
+                devices.append({"aliasname": r.alias, "name": r.hostname, "devicetype": "Receiver"})
         else:
-            token = parts[4]
-            tx = _lookup_tx(cfg, token)
-            if tx is not None:
-                devices.append({"alias": tx.alias, "hostname": tx.hostname, "role": "TX"})
-            else:
+            for token in parts[4:]:
+                tx = _lookup_tx(cfg, token)
+                if tx is not None:
+                    devices.append({"aliasname": tx.alias, "name": tx.hostname, "devicetype": "Transmitter"})
+                    continue
                 rx = _lookup_rx(cfg, token)
                 if rx is not None:
-                    devices.append({"alias": rx.alias, "hostname": rx.hostname, "role": "RX"})
-                else:
-                    return ["unknown command"]
-        return ["devices json info: " + json.dumps({"devices": devices}, separators=(",", ":"))]
+                    devices.append({"aliasname": rx.alias, "name": rx.hostname, "devicetype": "Receiver"})
+            if not devices:
+                return ["unknown command"]
+        return ["devices json info: " + _ctl_json({"devices": devices})]
 
     # Section 13.2 — device real-time status (100/110/140/200-tier JSON shape, API v6.6 / Appendix-style).
     if parts[:4] == ["config", "get", "device", "status"]:
@@ -3102,7 +3239,7 @@ def _handle_config_get(cfg: Config, session: NhdCtlSession, state: NhdState, cmd
 
         def _pack(rows: List[Dict[str, str]]) -> List[str]:
             body = {"devices status": rows}
-            return ["devices status info:", json.dumps(body, separators=(",", ":"))]
+            return ["devices status info: " + _ctl_json(body)]
 
         if len(tok) == 0:
             rows: List[Dict[str, str]] = []
@@ -3112,33 +3249,17 @@ def _handle_config_get(cfg: Config, session: NhdCtlSession, state: NhdState, cmd
                 rows.append(_device_status_rx_dict(r, state))
             return _pack(rows)
 
-        if len(tok) == 1:
-            tx = _lookup_tx(cfg, tok[0])
+        rows: List[Dict[str, str]] = []
+        for token in tok:
+            tx = _lookup_tx(cfg, token)
             if tx is not None:
-                return _pack([_device_status_tx_dict(tx)])
-            rx = _lookup_rx(cfg, tok[0])
+                rows.append(_device_status_tx_dict(tx))
+                continue
+            rx = _lookup_rx(cfg, token)
             if rx is not None:
-                return _pack([_device_status_rx_dict(rx, state)])
-            return ["unknown command"]
-
-        if len(tok) == 2:
-            a, b = tok[0], tok[1]
-            tx_a, rx_a = _lookup_tx(cfg, a), _lookup_rx(cfg, a)
-            tx_b, rx_b = _lookup_tx(cfg, b), _lookup_rx(cfg, b)
-            tx: Optional[Tx] = None
-            rx: Optional[Rx] = None
-            if tx_a and rx_b:
-                tx, rx = tx_a, rx_b
-            elif tx_b and rx_a:
-                tx, rx = tx_b, rx_a
-            elif rx_a and tx_b:
-                tx, rx = tx_b, rx_a
-            elif rx_b and tx_a:
-                tx, rx = tx_a, rx_b
-            if tx is None or rx is None:
-                return ["unknown command"]
-            # API example order: TX (source) object first, then RX (display).
-            return _pack([_device_status_tx_dict(tx), _device_status_rx_dict(rx, state)])
+                rows.append(_device_status_rx_dict(rx, state))
+        if rows:
+            return _pack(rows)
 
         return ["unknown command"]
 
@@ -3310,11 +3431,11 @@ def _format_matrix_info(
     mapping: Dict[str, Optional[str]],
     rx_aliases: List[str],
 ) -> List[str]:
-    lines = [f"{heading} information:"]
+    tokens: List[str] = []
     for rx in rx_aliases:
         tx = mapping.get(rx)
-        lines.append(f"{(tx if tx is not None else 'NULL')} {rx}")
-    return lines
+        tokens.append(f"{(tx if tx is not None else 'NULL')} {rx}")
+    return [f"{heading} information: " + " ".join(tokens)]
 
 
 def _as_success(line: str) -> str:
