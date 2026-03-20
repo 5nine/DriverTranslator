@@ -2754,6 +2754,15 @@ class NhdState:
             self.serial[rx] = tx_alias
             self.infrared[rx] = tx_alias
 
+    def set_rx_all_media(self, *, rx_alias: str, tx_alias: Optional[str]) -> None:
+        if rx_alias not in self.video:
+            return
+        self.video[rx_alias] = tx_alias
+        self.audio[rx_alias] = tx_alias
+        self.usb[rx_alias] = tx_alias
+        self.serial[rx_alias] = tx_alias
+        self.infrared[rx_alias] = tx_alias
+
     def set_breakaway(self, *, kind: str, tx_alias: Optional[str], rx_aliases: List[str]) -> None:
         table = {
             "video": self.video,
