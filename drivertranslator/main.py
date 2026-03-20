@@ -982,7 +982,7 @@ async def _handle_http_client(
     cfg: Config,
     health: HealthState,
     amx: Any,
-    state: NhdState,
+    state: ControllerState,
     runtime: RuntimeSettings,
     problems: ProblemState,
     started_at: float,
@@ -2906,7 +2906,7 @@ class NhdCtlSession:
         self.alias_mode: bool = True  # default per doc: on
 
 
-class NhdState:
+class ControllerState:
     """
     Shared state across sessions to emulate the controller.
 
@@ -3100,7 +3100,7 @@ def _device_status_tx_dict(tx: Tx) -> Dict[str, str]:
     }
 
 
-def _device_status_rx_dict(rx: Rx, state: NhdState) -> Dict[str, str]:
+def _device_status_rx_dict(rx: Rx, state: ControllerState) -> Dict[str, str]:
     online = bool(state.rx_online.get(rx.alias, True))
     hdmi_enabled = state.rx_hdmi_output.get(rx.alias)
     routed_tx = state.video.get(rx.alias)
@@ -3154,7 +3154,7 @@ def _device_status_rx_dict(rx: Rx, state: NhdState) -> Dict[str, str]:
     }
 
 
-def _handle_config_get(cfg: Config, session: NhdCtlSession, state: NhdState, cmd: str) -> List[str]:
+def _handle_config_get(cfg: Config, session: NhdCtlSession, state: ControllerState, cmd: str) -> List[str]:
     parts = cmd.split()
     if parts[:3] == ["config", "get", "version"]:
         return [f"API version: v{cfg.nhd.api} System version: v{cfg.nhd.web}(v{cfg.nhd.core})"]
@@ -3389,7 +3389,7 @@ def _handle_config_get(cfg: Config, session: NhdCtlSession, state: NhdState, cmd
 
 
 async def _handle_matrix_set(
-    cfg: Config, amx: Any, state: NhdState, cmd: str, timeout_ms: int
+    cfg: Config, amx: Any, state: ControllerState, cmd: str, timeout_ms: int
 ) -> Tuple[bool, str, List[Tuple[str, str, str]], Dict[str, Dict[str, str]]]:
     # cmd: "matrix set <TX> <RX1> <RX2> ... <RXn>"
     parts = cmd.split()
@@ -3434,7 +3434,7 @@ async def _handle_matrix_set(
     return True, cmd, failures, status_by_rx
 
 
-async def _refresh_hdmi_outputs(*, cfg: Config, amx: Any, state: NhdState, timeout_ms: int) -> None:
+async def _refresh_hdmi_outputs(*, cfg: Config, amx: Any, state: ControllerState, timeout_ms: int) -> None:
     if not hasattr(amx, "get_hdmi_output"):
         return
     rx_aliases = sorted(cfg.rx_by_alias.keys(), key=_rx_alias_sort_key)
@@ -3462,7 +3462,7 @@ async def _refresh_hdmi_outputs_for_aliases(
     *,
     cfg: Config,
     amx: Any,
-    state: NhdState,
+    state: ControllerState,
     timeout_ms: int,
     rx_aliases: List[str],
 ) -> None:
@@ -3493,7 +3493,7 @@ async def _apply_amx_command_to_rx_aliases(
     *,
     cfg: Config,
     amx: Any,
-    state: NhdState,
+    state: ControllerState,
     rx_aliases: List[str],
     command: str,
     timeout_ms: int,
@@ -3613,7 +3613,7 @@ def _handle_videowall_get(cfg: Config, cmd: str) -> List[str]:
 async def handle_client(
     cfg: Config,
     amx: Any,
-    state: NhdState,
+    state: ControllerState,
     notifier: RtiNotifier,
     health: HealthState,
     runtime: RuntimeSettings,
@@ -4067,7 +4067,7 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
             set_retry_backoff_max_ms=cfg.amx_set_retry_backoff_max_ms,
         )
 
-    state = NhdState(cfg)
+    state = ControllerState(cfg)
     if cfg.amx_dry_run:
         # Dry-run baseline: emulate RX status as STREAM:1 and HDMI enabled.
         tx_stream1_alias: Optional[str] = None
@@ -4090,6 +4090,10 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         for rx in cfg.rx_by_alias.values():
             if rx.amx_decoder_ip in offline:
                 state.set_rx_online(rx.alias, False)
+    elif not cfg.amx_dry_run:
+        # In live mode, avoid optimistic "connected" until we have evidence.
+        for rx in cfg.rx_by_alias.values():
+            state.set_rx_online(rx.alias, False)
     health = HealthState()
     runtime = RuntimeSettings(cfg)
     problems = ProblemState()
@@ -4106,17 +4110,24 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
     notifier.attach_problem_state(problems)
     await notifier.start()
 
-    # Optional AMX self-test on startup (problems-only notification)
-    if cfg.amx_self_test_on_start:
-        res = await _amx_self_test(cfg=cfg, amx=amx)
-        fail = res.get("unreachable") or []
-        if fail:
-            fail_l = list(fail)
-            await notifier.problem(
-                "amx.selftest",
-                f"DT: ERROR AMX self-test: {res.get('ok', 0)}/{res.get('total', 0)} reachable. Unreachable: {', '.join(fail_l[:5])}"
-                + (" ..." if len(fail_l) > 5 else ""),
-            )
+    async def _run_startup_self_test() -> None:
+        # Run in background so web/RTI listeners come up immediately.
+        try:
+            res = await _amx_self_test(cfg=cfg, amx=amx)
+            unreachable = {str(x).strip() for x in (res.get("unreachable") or [])}
+            # Reflect startup connectivity on the status page.
+            for rx in cfg.rx_by_alias.values():
+                state.set_rx_online(rx.alias, rx.amx_decoder_ip not in unreachable)
+            fail = res.get("unreachable") or []
+            if fail:
+                fail_l = list(fail)
+                await notifier.problem(
+                    "amx.selftest",
+                    f"DT: ERROR AMX self-test: {res.get('ok', 0)}/{res.get('total', 0)} reachable. Unreachable: {', '.join(fail_l[:5])}"
+                    + (" ..." if len(fail_l) > 5 else ""),
+                )
+        except Exception:
+            LOG.exception("Startup AMX self-test failed")
 
     status = StatusReporter(
         enabled=cfg.rti_status_enabled,
@@ -4160,6 +4171,10 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
 
     addrs = ", ".join(str(sock.getsockname()) for sock in (server.sockets or []))
     LOG.info("Listening on %s", addrs)
+
+    # Optional AMX self-test on startup (problems-only notification), non-blocking.
+    if cfg.amx_self_test_on_start:
+        asyncio.create_task(_run_startup_self_test())
 
     async with server:
         await server.serve_forever()
