@@ -2251,8 +2251,15 @@ class DryRunAmxClient:
     def __init__(self, *, decoder_port: int, offline_decoders: Optional[List[str]] = None):
         self._decoder_port = decoder_port
         self._offline = {x.strip() for x in (offline_decoders or []) if str(x).strip()}
+        self._sim_stream: Dict[str, int] = {}
+        self._sim_hdmi_enabled: Dict[str, bool] = {}
         if self._offline:
             LOG.warning("AMX (dry-run) offline simulation enabled for %d decoder(s): %s", len(self._offline), sorted(self._offline))
+
+    def _ensure_sim_state(self, decoder_ip: str) -> None:
+        # Simulate AMX RX defaults at startup.
+        self._sim_stream.setdefault(decoder_ip, 1)
+        self._sim_hdmi_enabled.setdefault(decoder_ip, True)
 
     async def set_stream(self, *, decoder_ip: str, stream: int) -> None:
         if stream <= 0:
@@ -2260,6 +2267,8 @@ class DryRunAmxClient:
         if decoder_ip in self._offline:
             LOG.error("AMX (dry-run) simulated OFFLINE decoder: %s:%d", decoder_ip, self._decoder_port)
             raise ConnectionError(f"(dry-run) Simulated offline decoder: {decoder_ip}:{self._decoder_port}")
+        self._ensure_sim_state(decoder_ip)
+        self._sim_stream[decoder_ip] = int(stream)
         cmd = f"set:{stream}\\r".encode("ascii")
         LOG.info("AMX (dry-run) -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
 
@@ -2272,12 +2281,25 @@ class DryRunAmxClient:
         _ = timeout_ms
         if decoder_ip in self._offline:
             return None
-        return None
+        self._ensure_sim_state(decoder_ip)
+        return bool(self._sim_hdmi_enabled.get(decoder_ip, True))
+
+    async def get_status_fields(self, *, decoder_ip: str, timeout_ms: int) -> Dict[str, str]:
+        _ = timeout_ms
+        if decoder_ip in self._offline:
+            return {}
+        self._ensure_sim_state(decoder_ip)
+        return {
+            "STREAM": str(self._sim_stream.get(decoder_ip, 1)),
+            "HDMIOFF": "off" if self._sim_hdmi_enabled.get(decoder_ip, True) else "on",
+        }
 
     async def set_hdmi_output(self, *, decoder_ip: str, enabled: bool) -> None:
         if decoder_ip in self._offline:
             LOG.error("AMX (dry-run) simulated OFFLINE decoder: %s:%d", decoder_ip, self._decoder_port)
             raise ConnectionError(f"(dry-run) Simulated offline decoder: {decoder_ip}:{self._decoder_port}")
+        self._ensure_sim_state(decoder_ip)
+        self._sim_hdmi_enabled[decoder_ip] = bool(enabled)
         cmd = b"hdmiOn\r" if enabled else b"hdmiOff\r"
         LOG.info("AMX (dry-run) -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
 
@@ -2285,6 +2307,17 @@ class DryRunAmxClient:
         if decoder_ip in self._offline:
             LOG.error("AMX (dry-run) simulated OFFLINE decoder: %s:%d", decoder_ip, self._decoder_port)
             raise ConnectionError(f"(dry-run) Simulated offline decoder: {decoder_ip}:{self._decoder_port}")
+        self._ensure_sim_state(decoder_ip)
+        c = command.strip().lower()
+        if c.startswith("set:"):
+            try:
+                self._sim_stream[decoder_ip] = int(c.split(":", 1)[1].strip())
+            except Exception:
+                pass
+        elif c == "hdmioff":
+            self._sim_hdmi_enabled[decoder_ip] = False
+        elif c == "hdmion":
+            self._sim_hdmi_enabled[decoder_ip] = True
         payload = (command if command.endswith("\r") else (command + "\r")).encode("ascii")
         LOG.info("AMX (dry-run) -> %s:%d %r", decoder_ip, self._decoder_port, payload)
 
@@ -2293,7 +2326,7 @@ class DryRunAmxClient:
     ) -> Optional[bool]:
         _ = timeout_ms
         await self.send_command(decoder_ip=decoder_ip, command=command)
-        return None
+        return await self.get_hdmi_output(decoder_ip=decoder_ip, timeout_ms=timeout_ms)
 
 
 class PersistentAmxClient:
