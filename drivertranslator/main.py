@@ -31,6 +31,7 @@ _unknown_ctl: Dict[str, Dict[str, Any]] = {}
 _unknown_ctl_lock = threading.Lock()
 _unknown_ctl_file: Optional[Path] = None
 _config_write_lock = threading.Lock()
+_TX_STATUS_POLL_INTERVAL_SECONDS = 30
 
 
 def _unknown_ctl_configure(*, enabled: bool, config_dir: Path, persist_path: Optional[str]) -> None:
@@ -1670,12 +1671,36 @@ async def _handle_http_client(
             tx_start_ip = cfg.tx_by_alias[tx_aliases[0]].ip if tx_aliases else ""
             rx_start_ip = cfg.rx_by_alias[rx_aliases[0]].ip if rx_aliases else ""
             endpoint_inventory = _load_endpoint_inventory(config_path=config_path)
+            tx_skip_by_alias = {
+                str(row.get("alias", "")): bool(row.get("skip", False))
+                for row in endpoint_inventory.get("tx", [])
+            }
             rx_skip_by_alias = {
                 str(row.get("alias", "")): bool(row.get("skip", False))
                 for row in endpoint_inventory.get("rx", [])
             }
             route_rows = []
+            active_tx_set = set(tx_aliases)
             active_rx_set = set(rx_aliases)
+            for tx_alias in tx_aliases:
+                tx = cfg.tx_by_alias[tx_alias]
+                tx_fields = state.tx_status_fields.get(tx_alias) or {}
+                polled_stream = (tx_fields.get("STREAM") or "").strip()
+                stream_txt = f"STREAM {polled_stream}" if polled_stream else f"STREAM {tx.amx_stream}"
+                tx_online = state.tx_online.get(tx_alias, False)
+                tx_status_txt = "ONLINE" if tx_online else "OFFLINE"
+                tx_status_cls = "ok" if tx_online else "bad"
+                signal_txt, signal_cls = _format_tx_signal(tx_fields)
+                tx_is_skip = bool(tx_skip_by_alias.get(tx_alias, False))
+                tx_next_skip = "false" if tx_is_skip else "true"
+                tx_skip_btn = (
+                    f"<button type=\"button\" class=\"ctrl-run\" data-dt-ctl=\"set_endpoint_skip\" "
+                    f"data-kind=\"tx\" data-alias=\"{html.escape(tx_alias)}\" data-skip=\"{tx_next_skip}\">"
+                    f"{'Unskip' if tx_is_skip else 'Skip'}</button>"
+                )
+                route_rows.append(
+                    f"<tr><td><code>{tx_alias}</code></td><td><code>{stream_txt}</code></td><td class=\"{tx_status_cls}\"><b>{tx_status_txt}</b></td><td class=\"{signal_cls}\"><b>{html.escape(signal_txt)}</b></td><td>{tx_skip_btn}</td></tr>"
+                )
             for rx_alias in rx_aliases:
                 tx_alias = state.video.get(rx_alias) or "NULL"
                 online = state.rx_online.get(rx_alias, True)
@@ -1700,6 +1725,24 @@ async def _handle_http_client(
                 )
                 route_rows.append(
                     f"<tr><td><code>{rx_alias}</code></td><td><code>{tx_alias}</code></td><td class=\"{status_cls}\"><b>{status_txt}</b></td><td class=\"{hdmi_cls}\"><b>{hdmi_txt}</b></td><td>{rx_skip_btn}</td></tr>"
+                )
+            # Show skipped TX rows even when they are not active in runtime config,
+            # so operators can always unskip after a restart.
+            skipped_only_tx_aliases = sorted(
+                [
+                    alias
+                    for alias, is_skip in tx_skip_by_alias.items()
+                    if is_skip and alias and alias not in active_tx_set
+                ],
+                key=_tx_alias_sort_key,
+            )
+            for tx_alias in skipped_only_tx_aliases:
+                tx_skip_btn = (
+                    f"<button type=\"button\" class=\"ctrl-run\" data-dt-ctl=\"set_endpoint_skip\" "
+                    f"data-kind=\"tx\" data-alias=\"{html.escape(tx_alias)}\" data-skip=\"false\">Unskip</button>"
+                )
+                route_rows.append(
+                    f"<tr><td><code>{html.escape(tx_alias)}</code></td><td><code>-</code></td><td class=\"bad\"><b>SKIPPED</b></td><td><b>-</b></td><td>{tx_skip_btn}</td></tr>"
                 )
             # Show skipped RX rows even when they are not active in runtime config,
             # so operators can always unskip after a restart.
@@ -2140,10 +2183,10 @@ async def _handle_http_client(
   </div>
 
   <div class="section-title">Matrix</div>
-  <p class="subtle">Emulated WyreStorm routing from RTI (<code>NULL</code> = no source). Status = last AMX send result per RX. HDMI Out = AMX <code>HDMIOFF</code> state (<code>ON</code>=enabled, <code>OFF</code>=disabled). Skip toggles are saved to config and apply after restart.</p>
+  <p class="subtle">Combined TX/RX matrix view. TX rows are polled from AMX <code>getStatus</code> every {_TX_STATUS_POLL_INTERVAL_SECONDS}s. RX rows show routed source and HDMI output (<code>HDMIOFF</code>: <code>ON</code>=enabled, <code>OFF</code>=disabled). Skip toggles are saved to config and apply after restart.</p>
   <div class="table-wrap">
   <table>
-    <thead><tr><th>RX (Output)</th><th>TX (Input)</th><th>Status</th><th>HDMI Out</th><th>Skip</th></tr></thead>
+    <thead><tr><th>Endpoint</th><th>Route / Stream</th><th>Status</th><th>Signal</th><th>Skip</th></tr></thead>
     <tbody>
       {route_html}
     </tbody>
@@ -3431,6 +3474,9 @@ class ControllerState:
         self.rx_online: Dict[str, bool] = {rx.alias: True for rx in cfg.rx_by_alias.values()}
         # Best-effort HDMI output state from AMX status (True=on, False=off, None=unknown).
         self.rx_hdmi_output: Dict[str, Optional[bool]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
+        # TX status is refreshed in background every 30 seconds.
+        self.tx_online: Dict[str, bool] = {tx.alias: True for tx in cfg.tx_by_alias.values()}
+        self.tx_status_fields: Dict[str, Dict[str, str]] = {tx.alias: {} for tx in cfg.tx_by_alias.values()}
 
     def set_rx_online(self, rx_alias: str, online: bool) -> None:
         if rx_alias in self.rx_online:
@@ -3439,6 +3485,14 @@ class ControllerState:
     def set_rx_hdmi_output(self, rx_alias: str, enabled: Optional[bool]) -> None:
         if rx_alias in self.rx_hdmi_output:
             self.rx_hdmi_output[rx_alias] = enabled
+
+    def set_tx_online(self, tx_alias: str, online: bool) -> None:
+        if tx_alias in self.tx_online:
+            self.tx_online[tx_alias] = bool(online)
+
+    def set_tx_status_fields(self, tx_alias: str, fields: Dict[str, str]) -> None:
+        if tx_alias in self.tx_status_fields:
+            self.tx_status_fields[tx_alias] = dict(fields)
 
     def set_all_media(self, *, tx_alias: Optional[str], rx_aliases: List[str]) -> None:
         for rx in rx_aliases:
@@ -3615,6 +3669,20 @@ def _device_status_tx_dict(tx: Tx) -> Dict[str, str]:
         "stream resolution": "1920x1080",
         "video stream ip address": vid,
     }
+
+
+def _format_tx_signal(fields: Dict[str, str]) -> Tuple[str, str]:
+    hdmi_in = (fields.get("HDMIINPUT") or "").strip().lower()
+    input_res = (fields.get("INPUTRES") or "").strip()
+    if hdmi_in == "connected":
+        if input_res:
+            return (f"HDMI IN: {input_res}", "ok")
+        return ("HDMI IN: CONNECTED", "ok")
+    if hdmi_in == "disconnected":
+        return ("HDMI IN: DISCONNECTED", "bad")
+    if input_res:
+        return (f"IN RES: {input_res}", "")
+    return ("UNKNOWN", "")
 
 
 def _device_status_rx_dict(rx: Rx, state: ControllerState) -> Dict[str, str]:
@@ -4004,6 +4072,115 @@ async def _refresh_hdmi_outputs_for_aliases(
             state.set_rx_hdmi_output(rx_alias, None)
         else:
             state.set_rx_hdmi_output(rx_alias, res if isinstance(res, bool) else None)
+
+
+async def _read_amx_status_fields_from_ip(
+    *,
+    host: str,
+    port: int,
+    connect_timeout_ms: int,
+    timeout_ms: int,
+    local_addr: Optional[Tuple[str, int]],
+    expanded_log: bool,
+) -> Dict[str, str]:
+    reader: Optional[asyncio.StreamReader] = None
+    writer: Optional[asyncio.StreamWriter] = None
+    try:
+        reader, writer = await _open_connection(
+            host,
+            port,
+            timeout=max(0.2, connect_timeout_ms / 1000),
+            local_addr=local_addr,
+        )
+        writer.write(b"?\r")
+        await writer.drain()
+        data = await asyncio.wait_for(reader.read(4096), timeout=max(0.2, timeout_ms / 1000))
+        _log_amx_inbound(enabled=expanded_log, decoder_ip=host, decoder_port=port, data=data)
+        return _parse_amx_status(data)
+    finally:
+        if writer is not None:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+
+async def _refresh_tx_statuses(*, cfg: Config, state: ControllerState, runtime: RuntimeSettings) -> None:
+    tx_aliases = sorted(cfg.tx_by_alias.keys(), key=_tx_alias_sort_key)
+    if not tx_aliases:
+        return
+
+    if cfg.amx_dry_run:
+        for tx_alias in tx_aliases:
+            tx = cfg.tx_by_alias[tx_alias]
+            fields = {
+                "STREAM": str(tx.amx_stream),
+                "PLAYMODE": "live",
+                "MUTE": "0",
+                "HDMIINPUT": "connected",
+                "INPUTRES": "1920x1080",
+            }
+            state.set_tx_online(tx_alias, True)
+            state.set_tx_status_fields(tx_alias, fields)
+        return
+
+    local_addr = (cfg.amx_bind_address, 0) if cfg.amx_bind_address else None
+    timeout_ms = max(200, min(5000, int(runtime.amx_verify_timeout_ms)))
+    tasks = []
+    for tx_alias in tx_aliases:
+        tx = cfg.tx_by_alias[tx_alias]
+        if not tx.ip:
+            tasks.append(None)
+            continue
+        tasks.append(
+            _read_amx_status_fields_from_ip(
+                host=tx.ip,
+                port=cfg.amx_decoder_port,
+                connect_timeout_ms=cfg.amx_connect_timeout_ms,
+                timeout_ms=timeout_ms,
+                local_addr=local_addr,
+                expanded_log=runtime.expanded_log,
+            )
+        )
+
+    awaited = [t for t in tasks if t is not None]
+    results: List[Any] = []
+    if awaited:
+        results = list(await asyncio.gather(*awaited, return_exceptions=True))
+    idx = 0
+    for tx_alias, task in zip(tx_aliases, tasks):
+        if task is None:
+            state.set_tx_online(tx_alias, False)
+            state.set_tx_status_fields(tx_alias, {})
+            continue
+        res = results[idx]
+        idx += 1
+        if isinstance(res, BaseException):
+            state.set_tx_online(tx_alias, False)
+            state.set_tx_status_fields(tx_alias, {})
+        else:
+            fields = res if isinstance(res, dict) else {}
+            state.set_tx_online(tx_alias, bool(fields))
+            state.set_tx_status_fields(tx_alias, fields)
+
+
+class TxStatusPoller:
+    def __init__(self, *, cfg: Config, state: ControllerState, runtime: RuntimeSettings) -> None:
+        self._cfg = cfg
+        self._state = state
+        self._runtime = runtime
+        self._task: Optional[asyncio.Task[None]] = None
+
+    async def start(self) -> None:
+        await _refresh_tx_statuses(cfg=self._cfg, state=self._state, runtime=self._runtime)
+        self._task = asyncio.create_task(self._loop(), name="dt-tx-status-poller")
+
+    async def _loop(self) -> None:
+        while True:
+            await asyncio.sleep(_TX_STATUS_POLL_INTERVAL_SECONDS)
+            try:
+                await _refresh_tx_statuses(cfg=self._cfg, state=self._state, runtime=self._runtime)
+            except Exception:
+                LOG.exception("TX status poll failed")
 
 
 async def _apply_amx_command_to_rx_aliases(
@@ -4675,6 +4852,22 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
                 )
         except Exception:
             LOG.exception("Startup AMX self-test failed")
+        try:
+            # Also prime TX status on startup so the status page has immediate TX visibility.
+            await _refresh_tx_statuses(cfg=cfg, state=state, runtime=runtime)
+            offline_txs = sorted(
+                [tx_alias for tx_alias in cfg.tx_by_alias.keys() if not state.tx_online.get(tx_alias, False)],
+                key=_tx_alias_sort_key,
+            )
+            if offline_txs:
+                await notifier.problem(
+                    "amx.txstatus.startup",
+                    f"DT: ERROR AMX TX startup status poll: {len(offline_txs)}/{len(cfg.tx_by_alias)} offline. "
+                    + ", ".join(offline_txs[:5])
+                    + (" ..." if len(offline_txs) > 5 else ""),
+                )
+        except Exception:
+            LOG.exception("Startup AMX TX status poll failed")
 
     status = StatusReporter(
         enabled=cfg.rti_status_enabled,
@@ -4689,6 +4882,8 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         runtime=runtime,
     )
     await status.start()
+    tx_poller = TxStatusPoller(cfg=cfg, state=state, runtime=runtime)
+    await tx_poller.start()
 
     if cfg.http_status_enabled:
         http_server = await asyncio.start_server(
