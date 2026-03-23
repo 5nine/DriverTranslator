@@ -1670,10 +1670,6 @@ async def _handle_http_client(
             tx_start_ip = cfg.tx_by_alias[tx_aliases[0]].ip if tx_aliases else ""
             rx_start_ip = cfg.rx_by_alias[rx_aliases[0]].ip if rx_aliases else ""
             endpoint_inventory = _load_endpoint_inventory(config_path=config_path)
-            tx_skip_by_alias = {
-                str(row.get("alias", "")): bool(row.get("skip", False))
-                for row in endpoint_inventory.get("tx", [])
-            }
             rx_skip_by_alias = {
                 str(row.get("alias", "")): bool(row.get("skip", False))
                 for row in endpoint_inventory.get("rx", [])
@@ -1701,17 +1697,8 @@ async def _handle_http_client(
                     f"data-kind=\"rx\" data-alias=\"{html.escape(rx_alias)}\" data-skip=\"{rx_next_skip}\">"
                     f"{'Unskip' if rx_is_skip else 'Skip'}</button>"
                 )
-                tx_skip_btn = "-"
-                if tx_alias and tx_alias != "NULL":
-                    tx_is_skip = bool(tx_skip_by_alias.get(tx_alias, False))
-                    tx_next_skip = "false" if tx_is_skip else "true"
-                    tx_skip_btn = (
-                        f"<button type=\"button\" class=\"ctrl-run\" data-dt-ctl=\"set_endpoint_skip\" "
-                        f"data-kind=\"tx\" data-alias=\"{html.escape(tx_alias)}\" data-skip=\"{tx_next_skip}\">"
-                        f"{'Unskip' if tx_is_skip else 'Skip'}</button>"
-                    )
                 route_rows.append(
-                    f"<tr><td><code>{rx_alias}</code></td><td><code>{tx_alias}</code></td><td class=\"{status_cls}\"><b>{status_txt}</b></td><td class=\"{hdmi_cls}\"><b>{hdmi_txt}</b></td><td>{rx_skip_btn}</td><td>{tx_skip_btn}</td></tr>"
+                    f"<tr><td><code>{rx_alias}</code></td><td><code>{tx_alias}</code></td><td class=\"{status_cls}\"><b>{status_txt}</b></td><td class=\"{hdmi_cls}\"><b>{hdmi_txt}</b></td><td>{rx_skip_btn}</td></tr>"
                 )
             route_html = "\n".join(route_rows)
             _ct = cfg.http_status_control_token or ""
@@ -2137,7 +2124,7 @@ async def _handle_http_client(
   <p class="subtle">Emulated WyreStorm routing from RTI (<code>NULL</code> = no source). Status = last AMX send result per RX. HDMI Out = AMX <code>HDMIOFF</code> state (<code>ON</code>=enabled, <code>OFF</code>=disabled). Skip toggles are saved to config and apply after restart.</p>
   <div class="table-wrap">
   <table>
-    <thead><tr><th>RX (Output)</th><th>TX (Input)</th><th>Status</th><th>HDMI Out</th><th>RX Skip</th><th>TX Skip</th></tr></thead>
+    <thead><tr><th>RX (Output)</th><th>TX (Input)</th><th>Status</th><th>HDMI Out</th><th>Skip</th></tr></thead>
     <tbody>
       {route_html}
     </tbody>
