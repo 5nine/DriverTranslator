@@ -734,6 +734,15 @@ def _parse_amx_status(data: bytes) -> Dict[str, str]:
     return out
 
 
+def _log_amx_inbound(*, enabled: bool, decoder_ip: str, decoder_port: int, data: bytes) -> None:
+    if not enabled:
+        return
+    if not data:
+        LOG.info("AMX <- %s:%d <empty>", decoder_ip, decoder_port)
+        return
+    LOG.info("AMX <- %s:%d %r", decoder_ip, decoder_port, data)
+
+
 def _hdmi_enabled_from_status_fields(fields: Dict[str, str]) -> Optional[bool]:
     hdmi_off = (fields.get("HDMIOFF") or "").strip().lower()
     if hdmi_off == "on":
@@ -1101,6 +1110,11 @@ async def _handle_http_client(
                         key=key,
                         value=snap.get(key),
                     )
+                    if key == "expanded_log" and hasattr(amx, "set_expanded_log"):
+                        try:
+                            amx.set_expanded_log(bool(snap.get("expanded_log")))
+                        except Exception:
+                            LOG.exception("Failed applying expanded_log to AMX client")
                 except Exception:
                     LOG.warning(
                         "HTTP control [source=%s]: set rejected key=%r value=%r",
@@ -2119,6 +2133,7 @@ class AmxClient:
         set_retry_attempts: int = 1,
         set_retry_backoff_initial_ms: int = 0,
         set_retry_backoff_max_ms: int = 0,
+        expanded_log: bool = False,
     ):
         self._decoder_port = decoder_port
         self._connect_timeout = connect_timeout_ms / 1000
@@ -2128,6 +2143,10 @@ class AmxClient:
         self._set_retry_attempts = max(1, int(set_retry_attempts))
         self._set_retry_backoff_initial_ms = max(0, int(set_retry_backoff_initial_ms))
         self._set_retry_backoff_max_ms = max(0, int(set_retry_backoff_max_ms))
+        self._expanded_log = bool(expanded_log)
+
+    def set_expanded_log(self, enabled: bool) -> None:
+        self._expanded_log = bool(enabled)
 
     def _lock_for(self, decoder_ip: str) -> asyncio.Lock:
         lock = self._locks.get(decoder_ip)
@@ -2217,6 +2236,9 @@ class AmxClient:
                 data = await asyncio.wait_for(reader.read(4096), timeout=timeout_ms / 1000)
             except Exception:
                 pass
+            _log_amx_inbound(
+                enabled=self._expanded_log, decoder_ip=decoder_ip, decoder_port=self._decoder_port, data=data
+            )
             parsed = _parse_amx_status(data)
             got = parsed.get("STREAM")
             return got == str(expected_stream)
@@ -2245,6 +2267,9 @@ class AmxClient:
                     data = await asyncio.wait_for(reader.read(4096), timeout=timeout_ms / 1000)
                 except Exception:
                     return None
+                _log_amx_inbound(
+                    enabled=self._expanded_log, decoder_ip=decoder_ip, decoder_port=self._decoder_port, data=data
+                )
                 parsed = _parse_amx_status(data)
                 hdmi_off = (parsed.get("HDMIOFF") or "").strip().lower()
                 if hdmi_off == "on":
@@ -2291,6 +2316,9 @@ class AmxClient:
                 data = await asyncio.wait_for(reader.read(4096), timeout=timeout_ms / 1000)
             except Exception:
                 return {}
+            _log_amx_inbound(
+                enabled=self._expanded_log, decoder_ip=decoder_ip, decoder_port=self._decoder_port, data=data
+            )
             return _parse_amx_status(data)
         finally:
             writer.close()
@@ -2316,7 +2344,10 @@ class AmxClient:
             # Many AMX commands respond with a full status packet; we don't need it for the RTI ack,
             # but reading a little helps avoid leaving unread data.
             try:
-                await asyncio.wait_for(reader.read(256), timeout=self._command_timeout)
+                data = await asyncio.wait_for(reader.read(256), timeout=self._command_timeout)
+                _log_amx_inbound(
+                    enabled=self._expanded_log, decoder_ip=decoder_ip, decoder_port=self._decoder_port, data=data
+                )
             except Exception:
                 pass
         finally:
@@ -2537,6 +2568,7 @@ class PersistentAmxClient:
         set_retry_attempts: int = 1,
         set_retry_backoff_initial_ms: int = 0,
         set_retry_backoff_max_ms: int = 0,
+        expanded_log: bool = False,
     ):
         self._decoder_port = decoder_port
         self._connect_timeout = connect_timeout_ms / 1000
@@ -2547,9 +2579,15 @@ class PersistentAmxClient:
         self._set_retry_attempts: int = max(1, int(set_retry_attempts))
         self._set_retry_backoff_initial_ms: int = max(0, int(set_retry_backoff_initial_ms))
         self._set_retry_backoff_max_ms: int = max(0, int(set_retry_backoff_max_ms))
+        self._expanded_log: bool = bool(expanded_log)
 
         self._workers: Dict[str, "_DecoderWorker"] = {}
         self._workers_lock = asyncio.Lock()
+
+    def set_expanded_log(self, enabled: bool) -> None:
+        self._expanded_log = bool(enabled)
+        for worker in self._workers.values():
+            worker.set_expanded_log(enabled)
 
     async def set_stream(self, *, decoder_ip: str, stream: int) -> None:
         if stream <= 0:
@@ -2600,6 +2638,7 @@ class PersistentAmxClient:
                     set_retry_attempts=self._set_retry_attempts,
                     set_retry_backoff_initial_ms=self._set_retry_backoff_initial_ms,
                     set_retry_backoff_max_ms=self._set_retry_backoff_max_ms,
+                    expanded_log=self._expanded_log,
                 )
                 w.set_queue_limit(getattr(self, "_set_queue_limit", 1))
                 self._workers[decoder_ip] = w
@@ -2633,6 +2672,7 @@ class _DecoderWorker:
         set_retry_attempts: int = 1,
         set_retry_backoff_initial_ms: int = 0,
         set_retry_backoff_max_ms: int = 0,
+        expanded_log: bool = False,
     ) -> None:
         self._decoder_ip = decoder_ip
         self._decoder_port = decoder_port
@@ -2643,6 +2683,7 @@ class _DecoderWorker:
         self._set_retry_attempts = max(1, int(set_retry_attempts))
         self._set_retry_backoff_initial_ms = max(0, int(set_retry_backoff_initial_ms))
         self._set_retry_backoff_max_ms = max(0, int(set_retry_backoff_max_ms))
+        self._expanded_log = bool(expanded_log)
 
         self._cond = asyncio.Condition()
         self._set_pending: Optional[Tuple[int, asyncio.Future[None]]] = None
@@ -2653,6 +2694,9 @@ class _DecoderWorker:
         self._connected_evt = asyncio.Event()
         self.is_connected: bool = False
         self._op_lock = asyncio.Lock()
+
+    def set_expanded_log(self, enabled: bool) -> None:
+        self._expanded_log = bool(enabled)
 
     def start(self) -> None:
         if self._task is None:
@@ -2751,6 +2795,9 @@ class _DecoderWorker:
                 data = await asyncio.wait_for(self._reader.read(4096), timeout=timeout_ms / 1000)
             except Exception:
                 return {}
+        _log_amx_inbound(
+            enabled=self._expanded_log, decoder_ip=self._decoder_ip, decoder_port=self._decoder_port, data=data
+        )
         return _parse_amx_status(data)
 
     async def _run(self) -> None:
@@ -2850,7 +2897,13 @@ class _DecoderWorker:
 
             # Best-effort read to keep RX buffers clear; don't block routing on large status packets.
             with contextlib.suppress(Exception):
-                await asyncio.wait_for(self._reader.read(256), timeout=self._command_timeout)
+                data = await asyncio.wait_for(self._reader.read(256), timeout=self._command_timeout)
+                _log_amx_inbound(
+                    enabled=self._expanded_log,
+                    decoder_ip=self._decoder_ip,
+                    decoder_port=self._decoder_port,
+                    data=data,
+                )
 
     async def _query_status(self, *, timeout_ms: int) -> bytes:
         async with self._op_lock:
@@ -2860,7 +2913,14 @@ class _DecoderWorker:
             self._writer.write(b"?\r")
             await self._writer.drain()
             try:
-                return await asyncio.wait_for(self._reader.read(4096), timeout=timeout_ms / 1000)
+                data = await asyncio.wait_for(self._reader.read(4096), timeout=timeout_ms / 1000)
+                _log_amx_inbound(
+                    enabled=self._expanded_log,
+                    decoder_ip=self._decoder_ip,
+                    decoder_port=self._decoder_port,
+                    data=data,
+                )
+                return data
             except Exception:
                 return b""
 
@@ -4083,6 +4143,7 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
             set_retry_attempts=cfg.amx_set_retry_attempts,
             set_retry_backoff_initial_ms=cfg.amx_set_retry_backoff_initial_ms,
             set_retry_backoff_max_ms=cfg.amx_set_retry_backoff_max_ms,
+            expanded_log=cfg.expanded_log,
         )
     else:
         amx = AmxClient(
@@ -4093,6 +4154,7 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
             set_retry_attempts=cfg.amx_set_retry_attempts,
             set_retry_backoff_initial_ms=cfg.amx_set_retry_backoff_initial_ms,
             set_retry_backoff_max_ms=cfg.amx_set_retry_backoff_max_ms,
+            expanded_log=cfg.expanded_log,
         )
 
     state = ControllerState(cfg)
