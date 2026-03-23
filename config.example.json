@@ -48,7 +48,7 @@
   },
   "rti_notify": {
     "enabled": false,
-    "protocol": "udp",
+    "protocol": "tcp",
     "host": "192.168.1.50",
     "port": 30001,
     "bind_address": null,
@@ -57,7 +57,7 @@
   },
   "rti_status": {
     "enabled": false,
-    "protocol": "udp",
+    "protocol": "tcp",
     "host": "192.168.1.50",
     "port": 30002,
     "bind_address": null,

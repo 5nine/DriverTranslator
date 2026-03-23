@@ -307,8 +307,8 @@ cfg = {
     "set_retry_backoff_max_ms": 1200
   },
   "server": { "expanded_log": False },
-  "rti_notify": { "enabled": rti_prob_enabled, "protocol": "udp", "host": rti_prob_host, "port": rti_prob_port, "bind_address": None, "min_interval_seconds": 10, "repeat_suppression_seconds": 300 },
-  "rti_status": { "enabled": rti_stat_enabled, "protocol": "udp", "host": rti_stat_host, "port": rti_stat_port, "bind_address": None, "interval_seconds": rti_stat_int },
+  "rti_notify": { "enabled": rti_prob_enabled, "protocol": "tcp", "host": rti_prob_host, "port": rti_prob_port, "bind_address": None, "min_interval_seconds": 10, "repeat_suppression_seconds": 300 },
+  "rti_status": { "enabled": rti_stat_enabled, "protocol": "tcp", "host": rti_stat_host, "port": rti_stat_port, "bind_address": None, "interval_seconds": rti_stat_int },
   "http_status": { "enabled": http_enabled, "bind": http_bind, "port": http_port, "log_lines": http_log_lines, "control_token": None, "password": http_pw },
   "rti_control": { "enabled": False, "bind_address": None, "port": 0, "reboot_command": "DT REBOOT" }
 }
