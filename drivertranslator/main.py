@@ -3382,10 +3382,10 @@ def _handle_config_get(cfg: Config, session: NhdCtlSession, state: ControllerSta
         # `config get name` (all), or `config get name <aliasOrHostname>`
         if len(parts) == 3:
             lines: List[str] = []
-            for t in cfg.tx_by_alias.values():
-                lines.append(f"{t.hostname}'s alias is {t.alias}")
             for r in cfg.rx_by_alias.values():
                 lines.append(f"{r.hostname}'s alias is {r.alias}")
+            for t in cfg.tx_by_alias.values():
+                lines.append(f"{t.hostname}'s alias is {t.alias}")
             return lines
 
         token = parts[3]
