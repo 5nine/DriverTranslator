@@ -1680,17 +1680,15 @@ async def _handle_http_client(
                 for row in endpoint_inventory.get("rx", [])
             }
             route_rows = []
-            active_tx_set = set(tx_aliases)
-            active_rx_set = set(rx_aliases)
-            for tx_alias in tx_aliases:
-                tx = cfg.tx_by_alias[tx_alias]
-                tx_fields = state.tx_status_fields.get(tx_alias) or {}
-                polled_stream = (tx_fields.get("STREAM") or "").strip()
-                stream_txt = f"STREAM {polled_stream}" if polled_stream else f"STREAM {tx.amx_stream}"
-                tx_online = state.tx_online.get(tx_alias, False)
-                tx_status_txt = "ONLINE" if tx_online else "OFFLINE"
-                tx_status_cls = "ok" if tx_online else "bad"
-                signal_txt, signal_cls = _format_tx_signal(tx_fields)
+            tx_all_aliases = sorted(
+                set(tx_aliases).union({a for a in tx_skip_by_alias.keys() if a}),
+                key=_tx_alias_sort_key,
+            )
+            rx_all_aliases = sorted(
+                set(rx_aliases).union({a for a in rx_skip_by_alias.keys() if a}),
+                key=_rx_alias_sort_key,
+            )
+            for tx_alias in tx_all_aliases:
                 tx_is_skip = bool(tx_skip_by_alias.get(tx_alias, False))
                 tx_next_skip = "false" if tx_is_skip else "true"
                 tx_skip_btn = (
@@ -1698,10 +1696,35 @@ async def _handle_http_client(
                     f"data-kind=\"tx\" data-alias=\"{html.escape(tx_alias)}\" data-skip=\"{tx_next_skip}\">"
                     f"{'Unskip' if tx_is_skip else 'Skip'}</button>"
                 )
+                tx = cfg.tx_by_alias.get(tx_alias)
+                if tx is None:
+                    route_rows.append(
+                        f"<tr><td><code>{html.escape(tx_alias)}</code></td><td><code>-</code></td><td class=\"bad\"><b>SKIPPED</b></td><td><b>-</b></td><td>{tx_skip_btn}</td></tr>"
+                    )
+                    continue
+                tx_fields = state.tx_status_fields.get(tx_alias) or {}
+                polled_stream = (tx_fields.get("STREAM") or "").strip()
+                stream_txt = f"STREAM {polled_stream}" if polled_stream else f"STREAM {tx.amx_stream}"
+                tx_online = state.tx_online.get(tx_alias, False)
+                tx_status_txt = "ONLINE" if tx_online else "OFFLINE"
+                tx_status_cls = "ok" if tx_online else "bad"
+                signal_txt, signal_cls = _format_tx_signal(tx_fields)
                 route_rows.append(
                     f"<tr><td><code>{tx_alias}</code></td><td><code>{stream_txt}</code></td><td class=\"{tx_status_cls}\"><b>{tx_status_txt}</b></td><td class=\"{signal_cls}\"><b>{html.escape(signal_txt)}</b></td><td>{tx_skip_btn}</td></tr>"
                 )
-            for rx_alias in rx_aliases:
+            for rx_alias in rx_all_aliases:
+                rx_is_skip = bool(rx_skip_by_alias.get(rx_alias, False))
+                rx_next_skip = "false" if rx_is_skip else "true"
+                rx_skip_btn = (
+                    f"<button type=\"button\" class=\"ctrl-run\" data-dt-ctl=\"set_endpoint_skip\" "
+                    f"data-kind=\"rx\" data-alias=\"{html.escape(rx_alias)}\" data-skip=\"{rx_next_skip}\">"
+                    f"{'Unskip' if rx_is_skip else 'Skip'}</button>"
+                )
+                if rx_alias not in cfg.rx_by_alias:
+                    route_rows.append(
+                        f"<tr><td><code>{html.escape(rx_alias)}</code></td><td><code>NULL</code></td><td class=\"bad\"><b>SKIPPED</b></td><td><b>-</b></td><td>{rx_skip_btn}</td></tr>"
+                    )
+                    continue
                 tx_alias = state.video.get(rx_alias) or "NULL"
                 online = state.rx_online.get(rx_alias, True)
                 status_txt = "ONLINE" if online else "OFFLINE"
@@ -1716,51 +1739,8 @@ async def _handle_http_client(
                 else:
                     hdmi_txt = "UNKNOWN"
                     hdmi_cls = ""
-                rx_is_skip = bool(rx_skip_by_alias.get(rx_alias, False))
-                rx_next_skip = "false" if rx_is_skip else "true"
-                rx_skip_btn = (
-                    f"<button type=\"button\" class=\"ctrl-run\" data-dt-ctl=\"set_endpoint_skip\" "
-                    f"data-kind=\"rx\" data-alias=\"{html.escape(rx_alias)}\" data-skip=\"{rx_next_skip}\">"
-                    f"{'Unskip' if rx_is_skip else 'Skip'}</button>"
-                )
                 route_rows.append(
                     f"<tr><td><code>{rx_alias}</code></td><td><code>{tx_alias}</code></td><td class=\"{status_cls}\"><b>{status_txt}</b></td><td class=\"{hdmi_cls}\"><b>{hdmi_txt}</b></td><td>{rx_skip_btn}</td></tr>"
-                )
-            # Show skipped TX rows even when they are not active in runtime config,
-            # so operators can always unskip after a restart.
-            skipped_only_tx_aliases = sorted(
-                [
-                    alias
-                    for alias, is_skip in tx_skip_by_alias.items()
-                    if is_skip and alias and alias not in active_tx_set
-                ],
-                key=_tx_alias_sort_key,
-            )
-            for tx_alias in skipped_only_tx_aliases:
-                tx_skip_btn = (
-                    f"<button type=\"button\" class=\"ctrl-run\" data-dt-ctl=\"set_endpoint_skip\" "
-                    f"data-kind=\"tx\" data-alias=\"{html.escape(tx_alias)}\" data-skip=\"false\">Unskip</button>"
-                )
-                route_rows.append(
-                    f"<tr><td><code>{html.escape(tx_alias)}</code></td><td><code>-</code></td><td class=\"bad\"><b>SKIPPED</b></td><td><b>-</b></td><td>{tx_skip_btn}</td></tr>"
-                )
-            # Show skipped RX rows even when they are not active in runtime config,
-            # so operators can always unskip after a restart.
-            skipped_only_aliases = sorted(
-                [
-                    alias
-                    for alias, is_skip in rx_skip_by_alias.items()
-                    if is_skip and alias and alias not in active_rx_set
-                ],
-                key=_rx_alias_sort_key,
-            )
-            for rx_alias in skipped_only_aliases:
-                rx_skip_btn = (
-                    f"<button type=\"button\" class=\"ctrl-run\" data-dt-ctl=\"set_endpoint_skip\" "
-                    f"data-kind=\"rx\" data-alias=\"{html.escape(rx_alias)}\" data-skip=\"false\">Unskip</button>"
-                )
-                route_rows.append(
-                    f"<tr><td><code>{html.escape(rx_alias)}</code></td><td><code>NULL</code></td><td class=\"bad\"><b>SKIPPED</b></td><td><b>-</b></td><td>{rx_skip_btn}</td></tr>"
                 )
             route_html = "\n".join(route_rows)
             _ct = cfg.http_status_control_token or ""
