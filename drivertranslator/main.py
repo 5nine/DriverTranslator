@@ -10,6 +10,7 @@ import logging
 import random
 import re
 import secrets
+import socket
 import subprocess
 import threading
 import time
@@ -586,7 +587,25 @@ class RtiNotifier:
         if self._protocol == "udp":
             loop = asyncio.get_running_loop()
             local = (self._bind_address, 0) if self._bind_address else None
-            transport, _ = await loop.create_datagram_endpoint(lambda: asyncio.DatagramProtocol(), local_addr=local)
+            try:
+                transport, _ = await loop.create_datagram_endpoint(
+                    lambda: asyncio.DatagramProtocol(),
+                    local_addr=local,
+                    family=socket.AF_INET,
+                )
+            except Exception as e:
+                if local is None:
+                    raise
+                LOG.warning(
+                    "RTI notifier UDP bind failed for %r (%s); retrying wildcard IPv4 bind.",
+                    self._bind_address,
+                    e,
+                )
+                transport, _ = await loop.create_datagram_endpoint(
+                    lambda: asyncio.DatagramProtocol(),
+                    local_addr=("0.0.0.0", 0),
+                    family=socket.AF_INET,
+                )
             self._udp_transport = transport  # type: ignore[assignment]
             self._udp_ready.set()
 
