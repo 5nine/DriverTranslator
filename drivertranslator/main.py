@@ -1675,6 +1675,7 @@ async def _handle_http_client(
                 for row in endpoint_inventory.get("rx", [])
             }
             route_rows = []
+            active_rx_set = set(rx_aliases)
             for rx_alias in rx_aliases:
                 tx_alias = state.video.get(rx_alias) or "NULL"
                 online = state.rx_online.get(rx_alias, True)
@@ -1699,6 +1700,24 @@ async def _handle_http_client(
                 )
                 route_rows.append(
                     f"<tr><td><code>{rx_alias}</code></td><td><code>{tx_alias}</code></td><td class=\"{status_cls}\"><b>{status_txt}</b></td><td class=\"{hdmi_cls}\"><b>{hdmi_txt}</b></td><td>{rx_skip_btn}</td></tr>"
+                )
+            # Show skipped RX rows even when they are not active in runtime config,
+            # so operators can always unskip after a restart.
+            skipped_only_aliases = sorted(
+                [
+                    alias
+                    for alias, is_skip in rx_skip_by_alias.items()
+                    if is_skip and alias and alias not in active_rx_set
+                ],
+                key=_rx_alias_sort_key,
+            )
+            for rx_alias in skipped_only_aliases:
+                rx_skip_btn = (
+                    f"<button type=\"button\" class=\"ctrl-run\" data-dt-ctl=\"set_endpoint_skip\" "
+                    f"data-kind=\"rx\" data-alias=\"{html.escape(rx_alias)}\" data-skip=\"false\">Unskip</button>"
+                )
+                route_rows.append(
+                    f"<tr><td><code>{html.escape(rx_alias)}</code></td><td><code>NULL</code></td><td class=\"bad\"><b>SKIPPED</b></td><td><b>-</b></td><td>{rx_skip_btn}</td></tr>"
                 )
             route_html = "\n".join(route_rows)
             _ct = cfg.http_status_control_token or ""
