@@ -3925,6 +3925,9 @@ async def handle_client(
                         heading="matrix", mapping=state.video, rx_aliases=rx_aliases_m
                     ):
                         _write_rti_line(resp_line)
+                    # Match observed WyreStorm framing: terminate matrix blocks with blank lines.
+                    _write_rti_line("")
+                    _write_rti_line("")
                     await writer.drain()
                     continue
                 # Examples:
@@ -3965,6 +3968,9 @@ async def handle_client(
                         heading=f"matrix {kind}", mapping=table, rx_aliases=rx_aliases
                     ):
                         _write_rti_line(resp_line)
+                    # Match observed WyreStorm framing: terminate matrix blocks with blank lines.
+                    _write_rti_line("")
+                    _write_rti_line("")
                     await writer.drain()
                     continue
 
@@ -4057,6 +4063,10 @@ async def handle_client(
                     _unknown_ctl_record(line)
                 for resp_line in _cg_out:
                     _write_rti_line(resp_line)
+                # Match observed WyreStorm framing for multi-line config get responses.
+                if len(_cg_out) > 1 and _cg_out != ["unknown command"]:
+                    _write_rti_line("")
+                    _write_rti_line("")
                 await writer.drain()
                 continue
 
