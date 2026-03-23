@@ -844,6 +844,7 @@ class StatusReporter:
         amx: Any,
         cfg: Config,
         runtime: RuntimeSettings,
+        shared_notifier: Optional["RtiNotifier"] = None,
     ) -> None:
         self._enabled = enabled and bool(host) and int(port) > 0 and interval_seconds > 0
         self._interval = max(1, int(interval_seconds))
@@ -851,7 +852,8 @@ class StatusReporter:
         self._amx = amx
         self._cfg = cfg
         self._runtime = runtime
-        self._notifier = RtiNotifier(
+        self._uses_shared_notifier = shared_notifier is not None
+        self._notifier = shared_notifier or RtiNotifier(
             enabled=self._enabled,
             protocol=protocol,
             host=host,
@@ -865,7 +867,8 @@ class StatusReporter:
     async def start(self) -> None:
         if not self._enabled:
             return
-        await self._notifier.start()
+        if not self._uses_shared_notifier:
+            await self._notifier.start()
         self._task = asyncio.create_task(self._loop(), name="dt-status-reporter")
 
     async def _loop(self) -> None:
@@ -4907,6 +4910,24 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         except Exception:
             LOG.exception("Startup AMX TX status poll failed")
 
+    shared_status_notifier: Optional[RtiNotifier] = None
+    same_notify_status_target = (
+        cfg.rti_notify_enabled
+        and cfg.rti_status_enabled
+        and cfg.rti_notify_protocol == cfg.rti_status_protocol
+        and (cfg.rti_notify_host or "") == (cfg.rti_status_host or "")
+        and int(cfg.rti_notify_port) == int(cfg.rti_status_port)
+        and (cfg.rti_notify_bind_address or "") == (cfg.rti_status_bind_address or "")
+    )
+    if same_notify_status_target:
+        shared_status_notifier = notifier
+        LOG.info(
+            "RTI status shares notifier transport with rti_notify (%s %s:%d)",
+            cfg.rti_notify_protocol.upper(),
+            cfg.rti_notify_host,
+            cfg.rti_notify_port,
+        )
+
     status = StatusReporter(
         enabled=cfg.rti_status_enabled,
         protocol=cfg.rti_status_protocol,
@@ -4918,6 +4939,7 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         amx=amx,
         cfg=cfg,
         runtime=runtime,
+        shared_notifier=shared_status_notifier,
     )
     await status.start()
     tx_poller = TxStatusPoller(cfg=cfg, state=state, runtime=runtime)

@@ -124,10 +124,62 @@ Use RTI’s **Two Way Strings** driver for:
 - (Optional) Receiving **heartbeat status** (`rti_status`) via UDP
 - Sending the **UDP reboot** command (`rti_control`) to the DriverTranslator host
 
+#### Quick setup checklist (copy/paste friendly)
+
+For a single RX channel carrying both status + errors:
+
+- **Connection Type**: `UDP Connection`
+- **Network Address**: RTI/XP IP used by this driver instance
+- **Network Port**: `30001`
+- **PING Time**: `0`
+- **Enable Stop Char**: on
+- **Stop Char**: `%0a`
+- **Enable Start Byte**: off
+- **RX String 1 Name**: `DTSTATUS`
+- **RX String 1**: `DTSTATUS:$$*$$`
+- **RX String 2 Name**: `DTERROR`
+- **RX String 2**: `DT: ERROR$$*$$`
+- Optional **RX String 3 Name**: `DTERROR_AMX`
+- Optional **RX String 3**: `DT: ERROR AMX$$*$$`
+
+Details and config examples are in the sections below.
+
 Notes from the Two Way Strings docs that matter here:
 
 - **UDP mode is connectionless** (one-way send/receive)
 - The wildcard sequence **`$$*$$`** can be used in RX strings to match variable content
+- Multiple RX strings can match the same received line (one message can trigger multiple events/variables)
+- For line-oriented messages, enable framing stop char **`%0A`** (LF)
+
+#### Recommended single-channel profile (status + errors on one UDP listener)
+
+You can keep `rti_notify` and `rti_status` on the same RTI UDP port, then match by RX strings.
+
+Example `config.json`:
+
+```json
+{
+  "rti_notify": {
+    "enabled": true,
+    "protocol": "udp",
+    "host": "192.168.1.50",
+    "port": 30001,
+    "bind_address": null,
+    "min_interval_seconds": 10,
+    "repeat_suppression_seconds": 300
+  },
+  "rti_status": {
+    "enabled": true,
+    "protocol": "udp",
+    "host": "192.168.1.50",
+    "port": 30001,
+    "bind_address": null,
+    "interval_seconds": 30
+  }
+}
+```
+
+In current DriverTranslator, when `rti_notify` and `rti_status` have identical `protocol` + `host` + `port` + `bind_address`, status and error lines share the same notifier transport/socket path.
 
 #### Problems-only notifications (`rti_notify`) (RX into RTI)
 
@@ -157,6 +209,7 @@ Example `config.json`:
 #### Periodic status / heartbeat (`rti_status`, optional) (RX into RTI)
 
 If you want a separate, periodic status line (not errors), enable `rti_status`.
+You can use a different UDP port, or reuse the same one as `rti_notify` and filter by string in Two Way Strings.
 
 Example `config.json`:
 
