@@ -95,7 +95,12 @@ Configure in `config.json`:
 Set `bind` to your **control NIC** IP so it’s only reachable on the control network.
 
 - The status webpage requires **Basic auth**. Set `http_status.password` (installer default: `1234`).
-- The status page **reloads every 5 seconds** while the browser tab is visible (matrix, logs, overview stay current).
+- The status page does a **partial refresh every 5 seconds** while the browser tab is visible (matrix, logs, unknown-command list, and overview counters update without a full page reload).
+- The matrix now includes **both TX and RX rows**:
+  - TX rows are polled from AMX `getStatus` every **30 seconds** (and once at startup).
+  - RX rows show routed source and latest known HDMI output state from command-driven AMX status updates.
+- TX and RX **Skip/Unskip** controls are both in the matrix and persist to config.
+- Skipped TX/RX rows stay in their **natural sorted positions** (not moved to the bottom).
 - Web controls (including **reboot**) are available under the page’s **Controls** section after you log in.
 - If `http_status.control_token` is set, control endpoints also require `token=...` in the URL (optional extra safety).
 - **Unrecognized RTI commands** (status page) are persisted to `unknown_ctl.json` next to your config file, or to `unknown_ctl.persist_path` if set. Set `unknown_ctl.enabled` to `false` for in-memory only. **Clear list** on the page wipes the list (and the file when persistence is on).

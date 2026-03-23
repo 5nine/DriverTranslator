@@ -1649,16 +1649,6 @@ async def _handle_http_client(
             return
 
         if path == "/" or path.startswith("/?"):
-            # Refresh per-RX HDMI output state from AMX status for page display.
-            # In persistent mode, this is cheap and socket-safe.
-            # In non-persistent mode, keep polling command-driven from RTI handlers.
-            if cfg.amx_persistent:
-                await _refresh_hdmi_outputs(
-                    cfg=cfg,
-                    amx=amx,
-                    state=state,
-                    timeout_ms=max(200, min(1500, int(runtime.amx_verify_timeout_ms))),
-                )
             uptime_h = _format_uptime(int(snapshot["uptime_seconds"]))
             amx_conn = (
                 f"{snapshot['amx_connected']}/{max(snapshot['amx_total_known'] or 0, snapshot['rx_configured'])}"
@@ -2167,14 +2157,14 @@ async def _handle_http_client(
   <div class="table-wrap">
   <table>
     <thead><tr><th>Endpoint</th><th>Route / Stream</th><th>Status</th><th>Signal</th><th>Skip</th></tr></thead>
-    <tbody>
+    <tbody id="matrixBody">
       {route_html}
     </tbody>
   </table>
   </div>
 
   <div class="section-title">Recent logs</div>
-  <pre>{log_lines}</pre>
+  <pre id="logsPre">{log_lines}</pre>
 
   <div class="section-title">Unrecognized RTI commands</div>
   <p class="subtle">Lines the WyreStorm driver sent on the <b>RTI TCP port</b> (e.g. 2323) that returned <code>unknown command</code> (or similar). Identical lines are merged; the number is how many times each was sent. Times are <b>UTC</b>. Select the box below and copy for support. {_uc_persist_note}</p>
@@ -2223,11 +2213,13 @@ async def _handle_http_client(
       modalBackdrop.addEventListener('click', hideModal);
       document.addEventListener('keydown', (e) => {{ if (e.key === 'Escape') hideModal(); }});
 
-      const ctrlBtns = document.querySelectorAll('.ctrl-run');
+      function getCtrlButtons() {{
+        return document.querySelectorAll('.ctrl-run');
+      }}
       let dtBusy = false;
       function setBusy(on) {{
         dtBusy = !!on;
-        ctrlBtns.forEach((b) => {{ b.disabled = !!on; }});
+        getCtrlButtons().forEach((b) => {{ b.disabled = !!on; }});
       }}
 
       function setSavedMessage(key, j) {{
@@ -2381,8 +2373,11 @@ async def _handle_http_client(
         }});
       }}
 
-      document.querySelectorAll('[data-dt-ctl="set_endpoint_skip"]').forEach((btn) => {{
-        btn.addEventListener('click', async () => {{
+      function bindEndpointSkipButtons(scope) {{
+        (scope || document).querySelectorAll('[data-dt-ctl="set_endpoint_skip"]').forEach((btn) => {{
+          if (btn.getAttribute('data-dt-bound-skip') === '1') return;
+          btn.setAttribute('data-dt-bound-skip', '1');
+          btn.addEventListener('click', async () => {{
           const kind = String(btn.getAttribute('data-kind') || '').toLowerCase();
           const alias = String(btn.getAttribute('data-alias') || '');
           const skip = String(btn.getAttribute('data-skip') || 'true').toLowerCase();
@@ -2405,14 +2400,16 @@ async def _handle_http_client(
               return String(j.kind || '').toUpperCase() + ' ' + String(j.alias || alias) +
                 ' skip is now ' + String(j.skip).toLowerCase() + '. Restart DriverTranslator to apply.';
             }});
-            location.reload();
+            await refreshLiveSections();
           }} catch (e) {{
             showModal(false, 'Network error', String(e.message || e));
           }} finally {{
             setBusy(false);
           }}
+          }});
         }});
-      }});
+      }}
+      bindEndpointSkipButtons(document);
 
       document.querySelectorAll('[data-dt-ctl="selftest"]').forEach((btn) => {{
         btn.addEventListener('click', async () => {{
@@ -2572,8 +2569,36 @@ async def _handle_http_client(
         localStorage.setItem(themeKey, next);
       }});
 
+      const matrixBodyEl = document.getElementById('matrixBody');
+      const logsPreEl = document.getElementById('logsPre');
+      const unknownCtlPreEl = document.getElementById('unknownCtlPre');
+      let refreshInFlight = false;
+      async function refreshLiveSections() {{
+        if (dtBusy || refreshInFlight || document.hidden) return;
+        refreshInFlight = true;
+        try {{
+          const r = await fetch(window.location.pathname + window.location.search, {{ cache: 'no-store' }});
+          if (!r.ok) return;
+          const t = await r.text();
+          const doc = new DOMParser().parseFromString(t, 'text/html');
+          const newMatrixBody = doc.getElementById('matrixBody');
+          const newLogsPre = doc.getElementById('logsPre');
+          const newUnknownPre = doc.getElementById('unknownCtlPre');
+          if (matrixBodyEl && newMatrixBody) {{
+            matrixBodyEl.innerHTML = newMatrixBody.innerHTML;
+            bindEndpointSkipButtons(matrixBodyEl);
+          }}
+          if (logsPreEl && newLogsPre) logsPreEl.textContent = newLogsPre.textContent || '';
+          if (unknownCtlPreEl && newUnknownPre) unknownCtlPreEl.textContent = newUnknownPre.textContent || '';
+        }} catch (_e) {{
+          // keep page usable on transient refresh errors
+        }} finally {{
+          refreshInFlight = false;
+        }}
+      }}
+
       setInterval(function () {{
-        if (!document.hidden && !dtBusy) location.reload();
+        refreshLiveSections();
       }}, 5000);
     }})();
   </script>
