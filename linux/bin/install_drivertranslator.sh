@@ -37,6 +37,7 @@ CONFIG_PATH="$CONFIG_PATH_DEFAULT"
 NETWORK_CONFIG_PATH="$NETWORK_CONFIG_PATH_DEFAULT"
 DO_NETWORK=1
 DO_CONFIG=1
+ORIG_ARGS=("$@")
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -53,7 +54,7 @@ done
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Re-running with sudo (you may be prompted for password)..."
-  exec sudo -E bash "$0" "$@"
+  exec sudo -E bash "$0" "${ORIG_ARGS[@]}"
 fi
 
 echo "[1/8] Installing OS packages"

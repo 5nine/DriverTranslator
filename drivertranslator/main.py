@@ -265,13 +265,13 @@ def _as_int(v: Any, *, default: int) -> int:
 def _bind_addr(v: Any) -> Optional[str]:
     if v is None:
         return None
+    s = str(v).strip()
+    return s or None
 
 
 def _opt_str(v: Any) -> Optional[str]:
     if v is None:
         return None
-    s = str(v).strip()
-    return s or None
     s = str(v).strip()
     return s or None
 
@@ -1175,7 +1175,7 @@ async def _handle_http_client(
                     elif key == "expanded_log":
                         v = snap.get("expanded_log")
                         paras = [
-                            f"expanded_log is now {str(v).lower()} (logs RTI responses as RTI <- lines).",
+                            f"expanded_log is now {str(v).lower()} (logs RTI responses and AMX replies).",
                             "Takes effect immediately; no service restart needed.",
                         ]
                     else:
