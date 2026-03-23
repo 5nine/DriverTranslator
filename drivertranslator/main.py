@@ -21,6 +21,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+# Quick index (major sections in this file):
+# - Unknown-command tracking/persistence
+# - Config loading/validation
+# - RTI status reporting/notification
+# - HTTP status + control API/UI
+# - AMX client implementations (live/dry-run/persistent)
+# - Shared controller/runtime state
+# - RTI/NHD-CTL protocol helpers and command handlers
+# - Server bootstrap + process entrypoint
 LOG = logging.getLogger("drivertranslator")
 
 _LOG_RING: "collections.deque[str]" = collections.deque(maxlen=500)
@@ -34,6 +43,9 @@ _config_write_lock = threading.Lock()
 _TX_STATUS_POLL_INTERVAL_SECONDS = 30
 
 
+# ---------------------------------------------------------------------------
+# Unknown-command tracking and persistence
+# ---------------------------------------------------------------------------
 def _unknown_ctl_configure(*, enabled: bool, config_dir: Path, persist_path: Optional[str]) -> None:
     global _unknown_ctl_file
     if not enabled:
@@ -502,6 +514,9 @@ class Config:
     unknown_ctl_persist_path: Optional[str]
 
 
+# ---------------------------------------------------------------------------
+# Config loading and validation
+# ---------------------------------------------------------------------------
 def load_config(path: str) -> Config:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -812,6 +827,9 @@ class RtiNotifier:
         await self.send(msg)
 
 
+# ---------------------------------------------------------------------------
+# RTI status reporting / notification
+# ---------------------------------------------------------------------------
 class StatusReporter:
     def __init__(
         self,
@@ -1150,6 +1168,9 @@ def _get_log_tail(n: int) -> List[str]:
     return list(_LOG_RING)[-n:]
 
 
+# ---------------------------------------------------------------------------
+# HTTP status and control surface
+# ---------------------------------------------------------------------------
 async def _handle_http_client(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
@@ -2953,6 +2974,9 @@ class AmxClient:
         return None
 
 
+# ---------------------------------------------------------------------------
+# AMX client implementations (live, dry-run, persistent)
+# ---------------------------------------------------------------------------
 class DryRunAmxClient:
     def __init__(self, *, decoder_port: int, offline_decoders: Optional[List[str]] = None):
         self._decoder_port = decoder_port
@@ -3461,6 +3485,9 @@ class NhdCtlSession:
         self.alias_mode: bool = True  # default per doc: on
 
 
+# ---------------------------------------------------------------------------
+# Emulated controller/shared runtime state
+# ---------------------------------------------------------------------------
 class ControllerState:
     """
     Shared state across sessions to emulate the controller.
@@ -3629,6 +3656,9 @@ class _RtiControlUdp(asyncio.DatagramProtocol):
         asyncio.create_task(_do_reboot(reason=f"rti_udp:{addr}"))
 
 
+# ---------------------------------------------------------------------------
+# RTI/NHD-CTL protocol helpers and command surface
+# ---------------------------------------------------------------------------
 def _lookup_tx(cfg: Config, token: str) -> Optional[Tx]:
     return cfg.tx_by_alias.get(token) or cfg.tx_by_hostname.get(token)
 
@@ -4188,6 +4218,9 @@ class TxStatusPoller:
                 LOG.exception("TX status poll failed")
 
 
+# ---------------------------------------------------------------------------
+# Routing helpers and RTI TCP client handler
+# ---------------------------------------------------------------------------
 async def _apply_amx_command_to_rx_aliases(
     *,
     cfg: Config,
@@ -4927,6 +4960,9 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         await server.serve_forever()
 
 
+# ---------------------------------------------------------------------------
+# Process entrypoint
+# ---------------------------------------------------------------------------
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="RTI -> WyreStorm NHD-CTL emulator -> AMX AVoIP translator")
     parser.add_argument("--config", required=True, help="Path to config.json")
