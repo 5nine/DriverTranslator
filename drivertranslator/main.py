@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import collections
 import html
+import ipaddress
 import json
 import logging
 import random
@@ -141,6 +142,133 @@ def _persist_runtime_setting_to_config(*, config_path: str, key: str, value: Any
             raw[section] = obj
         obj[leaf] = value
         path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+
+
+def _generate_endpoints_from_size(
+    *,
+    tx_count: int,
+    rx_count: int,
+    tx_start_ip: str,
+    rx_start_ip: str,
+) -> Dict[str, List[Dict[str, Any]]]:
+    if tx_count <= 0 or rx_count <= 0:
+        raise ValueError("TX and RX counts must be greater than zero.")
+    # Keep a practical upper bound for a web-entered size.
+    if tx_count > 512 or rx_count > 512:
+        raise ValueError("TX and RX counts must be between 1 and 512.")
+
+    tx_start = ipaddress.IPv4Address(tx_start_ip.strip())
+    rx_start = ipaddress.IPv4Address(rx_start_ip.strip())
+
+    tx: List[Dict[str, Any]] = []
+    for i in range(tx_count):
+        n = i + 1
+        ip = str(tx_start + i)
+        tx.append(
+            {
+                "alias": f"IN{n}-BOX{n}",
+                "hostname": f"NHD-120-TX-{n:012d}",
+                "ip": ip,
+                "amx_stream": n,
+            }
+        )
+
+    rx: List[Dict[str, Any]] = []
+    for i in range(rx_count):
+        n = i + 1
+        ip = str(rx_start + i)
+        rx.append(
+            {
+                "alias": f"OUT{n}-TV{n}",
+                "hostname": f"NHD-120-RX-{(100 + n):012d}",
+                "ip": ip,
+                "amx_decoder_ip": ip,
+            }
+        )
+    return {"tx": tx, "rx": rx}
+
+
+def _persist_endpoints_to_config(
+    *,
+    config_path: str,
+    tx_count: int,
+    rx_count: int,
+    tx_start_ip: str,
+    rx_start_ip: str,
+) -> Dict[str, Any]:
+    endpoints = _generate_endpoints_from_size(
+        tx_count=tx_count,
+        rx_count=rx_count,
+        tx_start_ip=tx_start_ip,
+        rx_start_ip=rx_start_ip,
+    )
+    path = Path(config_path).expanduser().resolve()
+    with _config_write_lock:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw["endpoints"] = endpoints
+        path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+    return {
+        "ok": True,
+        "tx_count": tx_count,
+        "rx_count": rx_count,
+        "tx_start_ip": str(ipaddress.IPv4Address(tx_start_ip.strip())),
+        "rx_start_ip": str(ipaddress.IPv4Address(rx_start_ip.strip())),
+        "restart_required": True,
+    }
+
+
+def _load_endpoint_inventory(*, config_path: str) -> Dict[str, List[Dict[str, Any]]]:
+    path = Path(config_path).expanduser().resolve()
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    endpoints = raw.get("endpoints", {}) if isinstance(raw, dict) else {}
+    out: Dict[str, List[Dict[str, Any]]] = {"tx": [], "rx": []}
+    for kind in ("tx", "rx"):
+        rows = endpoints.get(kind, [])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            alias = str(row.get("alias", "")).strip()
+            if not alias:
+                continue
+            out[kind].append({"alias": alias, "skip": bool(row.get("skip", False))})
+    return out
+
+
+def _persist_endpoint_skip_to_config(*, config_path: str, kind: str, alias: str, skip: bool) -> Dict[str, Any]:
+    if kind not in ("tx", "rx"):
+        raise ValueError("kind must be 'tx' or 'rx'.")
+    alias_s = alias.strip()
+    if not alias_s:
+        raise ValueError("alias is required.")
+    path = Path(config_path).expanduser().resolve()
+    with _config_write_lock:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        endpoints = raw.get("endpoints")
+        if not isinstance(endpoints, dict):
+            raise ValueError("config missing endpoints section.")
+        rows = endpoints.get(kind)
+        if not isinstance(rows, list):
+            raise ValueError(f"config endpoints.{kind} is not a list.")
+        found = False
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("alias", "")).strip() == alias_s:
+                row["skip"] = bool(skip)
+                found = True
+                break
+        if not found:
+            raise ValueError(f"{kind.upper()} alias not found: {alias_s}")
+        path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+    return {
+        "ok": True,
+        "kind": kind,
+        "alias": alias_s,
+        "skip": bool(skip),
+        "restart_required": True,
+    }
 
 
 def _unknown_ctl_page_text() -> str:
@@ -403,6 +531,8 @@ def load_config(path: str) -> Config:
 
     txs: List[Tx] = []
     for t in tx_list:
+        if _as_bool(t.get("skip"), default=False):
+            continue
         alias = str(t["alias"])
         hostname = str(t.get("hostname") or f"NHD-TX-{alias}")
         ip = t.get("ip")
@@ -412,6 +542,8 @@ def load_config(path: str) -> Config:
 
     rxs: List[Rx] = []
     for r in rx_list:
+        if _as_bool(r.get("skip"), default=False):
+            continue
         alias = str(r["alias"])
         hostname = str(r.get("hostname") or f"NHD-RX-{alias}")
         ip = r.get("ip")
@@ -506,6 +638,7 @@ def _retry_delay_seconds(*, attempt_index: int, initial_ms: int, max_ms: int) ->
 
 
 _RX_ALIAS_RE = re.compile(r"^OUT(\d+)\b", re.IGNORECASE)
+_TX_ALIAS_RE = re.compile(r"^IN(\d+)\b", re.IGNORECASE)
 
 
 def _rx_alias_sort_key(alias: str) -> Tuple[int, str]:
@@ -513,6 +646,19 @@ def _rx_alias_sort_key(alias: str) -> Tuple[int, str]:
     Natural sort for RX aliases like OUT1-TV1, OUT10-TV10, ...
     """
     m = _RX_ALIAS_RE.match(alias.strip())
+    if not m:
+        return (10**9, alias)
+    try:
+        return (int(m.group(1)), alias)
+    except Exception:
+        return (10**9, alias)
+
+
+def _tx_alias_sort_key(alias: str) -> Tuple[int, str]:
+    """
+    Natural sort for TX aliases like IN1-BOX1, IN10-BOX10, ...
+    """
+    m = _TX_ALIAS_RE.match(alias.strip())
     if not m:
         return (10**9, alias)
     try:
@@ -1076,6 +1222,8 @@ async def _handle_http_client(
 
         # Basic control endpoints (optional token).
         # /control/set?key=<k>&value=<v>[&token=<t>]
+        # /control/set_endpoints?tx_count=<n>&rx_count=<n>&tx_start_ip=<ip>&rx_start_ip=<ip>
+        # /control/set_endpoint_skip?kind=tx|rx&alias=<alias>&skip=true|false
         # /control/selftest?[token=<t>]
         # /control/restart
         # /control/reboot
@@ -1113,6 +1261,156 @@ async def _handle_http_client(
                 return
 
             ctl_via = "status_page" if params.get("ui_sess") else "http_api"
+
+            if path.startswith("/control/set_endpoints"):
+                want_html = _params_want_html(params)
+                tx_count_s = params.get("tx_count", "").strip()
+                rx_count_s = params.get("rx_count", "").strip()
+                tx_start_ip = params.get("tx_start_ip", "").strip()
+                rx_start_ip = params.get("rx_start_ip", "").strip()
+                try:
+                    if not tx_count_s or not rx_count_s or not tx_start_ip or not rx_start_ip:
+                        raise ValueError("All parameters are required.")
+                    res = _persist_endpoints_to_config(
+                        config_path=config_path,
+                        tx_count=int(tx_count_s),
+                        rx_count=int(rx_count_s),
+                        tx_start_ip=tx_start_ip,
+                        rx_start_ip=rx_start_ip,
+                    )
+                except Exception as e:
+                    LOG.warning(
+                        "HTTP control [source=%s]: set_endpoints rejected tx_count=%r rx_count=%r tx_start_ip=%r rx_start_ip=%r err=%s",
+                        ctl_via,
+                        tx_count_s,
+                        rx_count_s,
+                        tx_start_ip,
+                        rx_start_ip,
+                        e,
+                    )
+                    bad_msg = (
+                        "Expected tx_count/rx_count as numbers (1-512) and tx_start_ip/rx_start_ip as valid IPv4 addresses."
+                    )
+                    if want_html:
+                        writer.write(
+                            _http_response(
+                                "400 Bad Request",
+                                "text/html; charset=utf-8",
+                                _control_feedback_html(
+                                    ok=False,
+                                    headline="Could not apply endpoint sizing",
+                                    paragraphs=[bad_msg],
+                                ),
+                            )
+                        )
+                    else:
+                        body = (
+                            json.dumps({"ok": False, "error": bad_msg}, indent=2) + "\n"
+                        ).encode("utf-8")
+                        writer.write(_http_response("400 Bad Request", "application/json", body))
+                    return
+                if want_html:
+                    writer.write(
+                        _http_response(
+                            "200 OK",
+                            "text/html; charset=utf-8",
+                            _control_feedback_html(
+                                ok=True,
+                                headline="Endpoint sizing saved",
+                                paragraphs=[
+                                    f"Configured TX={res['tx_count']} starting at {res['tx_start_ip']}; RX={res['rx_count']} starting at {res['rx_start_ip']}.",
+                                    "Saved to config. Restart DriverTranslator to apply new endpoint lists.",
+                                ],
+                                pre_json=res,
+                            ),
+                        )
+                    )
+                else:
+                    body = (json.dumps(res, indent=2) + "\n").encode("utf-8")
+                    writer.write(_http_response("200 OK", "application/json", body))
+                LOG.info(
+                    "HTTP control [source=%s]: set_endpoints tx_count=%s rx_count=%s tx_start_ip=%s rx_start_ip=%s (restart required)",
+                    ctl_via,
+                    res["tx_count"],
+                    res["rx_count"],
+                    res["tx_start_ip"],
+                    res["rx_start_ip"],
+                )
+                return
+
+            if path.startswith("/control/set_endpoint_skip"):
+                want_html = _params_want_html(params)
+                kind = params.get("kind", "").strip().lower()
+                alias = params.get("alias", "").strip()
+                skip_s = params.get("skip", "").strip().lower()
+                try:
+                    if skip_s in ("1", "true", "yes", "y", "on"):
+                        skip = True
+                    elif skip_s in ("0", "false", "no", "n", "off"):
+                        skip = False
+                    else:
+                        raise ValueError("skip must be true or false")
+                    res = _persist_endpoint_skip_to_config(
+                        config_path=config_path,
+                        kind=kind,
+                        alias=alias,
+                        skip=skip,
+                    )
+                except Exception as e:
+                    LOG.warning(
+                        "HTTP control [source=%s]: set_endpoint_skip rejected kind=%r alias=%r skip=%r err=%s",
+                        ctl_via,
+                        kind,
+                        alias,
+                        skip_s,
+                        e,
+                    )
+                    bad_msg = "Expected kind=tx|rx, alias=<existing endpoint alias>, and skip=true|false."
+                    if want_html:
+                        writer.write(
+                            _http_response(
+                                "400 Bad Request",
+                                "text/html; charset=utf-8",
+                                _control_feedback_html(
+                                    ok=False,
+                                    headline="Could not update endpoint skip",
+                                    paragraphs=[bad_msg],
+                                ),
+                            )
+                        )
+                    else:
+                        body = (
+                            json.dumps({"ok": False, "error": bad_msg}, indent=2) + "\n"
+                        ).encode("utf-8")
+                        writer.write(_http_response("400 Bad Request", "application/json", body))
+                    return
+                if want_html:
+                    writer.write(
+                        _http_response(
+                            "200 OK",
+                            "text/html; charset=utf-8",
+                            _control_feedback_html(
+                                ok=True,
+                                headline="Endpoint skip updated",
+                                paragraphs=[
+                                    f"{res['kind'].upper()} {res['alias']} skip is now {str(res['skip']).lower()}.",
+                                    "Saved to config. Restart DriverTranslator to apply.",
+                                ],
+                                pre_json=res,
+                            ),
+                        )
+                    )
+                else:
+                    body = (json.dumps(res, indent=2) + "\n").encode("utf-8")
+                    writer.write(_http_response("200 OK", "application/json", body))
+                LOG.info(
+                    "HTTP control [source=%s]: set_endpoint_skip %s %s skip=%s (restart required)",
+                    ctl_via,
+                    res["kind"],
+                    res["alias"],
+                    res["skip"],
+                )
+                return
 
             if path.startswith("/control/set"):
                 key = params.get("key", "")
@@ -1367,8 +1665,12 @@ async def _handle_http_client(
                 else "n/a"
             )
             log_lines = "\n".join(_get_log_tail(rt["http_log_lines"]))
+            tx_aliases = sorted(cfg.tx_by_alias.keys(), key=_tx_alias_sort_key)
+            rx_aliases = sorted(cfg.rx_by_alias.keys(), key=_rx_alias_sort_key)
+            tx_start_ip = cfg.tx_by_alias[tx_aliases[0]].ip if tx_aliases else ""
+            rx_start_ip = cfg.rx_by_alias[rx_aliases[0]].ip if rx_aliases else ""
             route_rows = []
-            for rx_alias in sorted(cfg.rx_by_alias.keys(), key=_rx_alias_sort_key):
+            for rx_alias in rx_aliases:
                 tx_alias = state.video.get(rx_alias) or "NULL"
                 online = state.rx_online.get(rx_alias, True)
                 status_txt = "ONLINE" if online else "OFFLINE"
@@ -1394,6 +1696,27 @@ async def _handle_http_client(
             _ctl_qs_js = json.dumps(ctl_qs)
             _amx_port = int(cfg.amx_decoder_port)
             _unknown_pre = html.escape(_unknown_ctl_page_text())
+            endpoint_inventory = _load_endpoint_inventory(config_path=config_path)
+            tx_skip_rows: List[str] = []
+            for row in endpoint_inventory.get("tx", []):
+                alias = str(row.get("alias", ""))
+                is_skip = bool(row.get("skip", False))
+                next_skip = "false" if is_skip else "true"
+                tx_skip_rows.append(
+                    f"<tr><td><code>{html.escape(alias)}</code></td><td><code>{'SKIPPED' if is_skip else 'ACTIVE'}</code></td>"
+                    f"<td><button type=\"button\" class=\"ctrl-run\" data-dt-ctl=\"set_endpoint_skip\" data-kind=\"tx\" data-alias=\"{html.escape(alias)}\" data-skip=\"{next_skip}\">{'Unskip' if is_skip else 'Skip'}</button></td></tr>"
+                )
+            rx_skip_rows: List[str] = []
+            for row in endpoint_inventory.get("rx", []):
+                alias = str(row.get("alias", ""))
+                is_skip = bool(row.get("skip", False))
+                next_skip = "false" if is_skip else "true"
+                rx_skip_rows.append(
+                    f"<tr><td><code>{html.escape(alias)}</code></td><td><code>{'SKIPPED' if is_skip else 'ACTIVE'}</code></td>"
+                    f"<td><button type=\"button\" class=\"ctrl-run\" data-dt-ctl=\"set_endpoint_skip\" data-kind=\"rx\" data-alias=\"{html.escape(alias)}\" data-skip=\"{next_skip}\">{'Unskip' if is_skip else 'Skip'}</button></td></tr>"
+                )
+            tx_skip_html = "\n".join(tx_skip_rows) if tx_skip_rows else "<tr><td colspan=\"3\" class=\"subtle\">No TX endpoints in config.</td></tr>"
+            rx_skip_html = "\n".join(rx_skip_rows) if rx_skip_rows else "<tr><td colspan=\"3\" class=\"subtle\">No RX endpoints in config.</td></tr>"
             if _unknown_ctl_file is not None:
                 _uc_persist_note = (
                     "Stored on disk at <code>"
@@ -1721,8 +2044,8 @@ async def _handle_http_client(
     <div class="row"><div>Uptime</div><div><code>{uptime_h}</code></div></div>
     <div class="row"><div>Mode</div><div><code>{snapshot['mode']}</code></div></div>
     <div class="row"><div>RTI clients</div><div><code>{snapshot['rti_clients']}</code></div></div>
-    <div class="row"><div>Configured TX</div><div><code>{snapshot['tx_configured']}</code></div></div>
-    <div class="row"><div>Configured RX</div><div><code>{snapshot['rx_configured']}</code></div></div>
+    <div class="row"><div>Configured TX</div><div><code id="st_tx_configured">{snapshot['tx_configured']}</code></div></div>
+    <div class="row"><div>Configured RX</div><div><code id="st_rx_configured">{snapshot['rx_configured']}</code></div></div>
     <div class="row"><div>AMX connections</div><div><code>{amx_conn}</code></div></div>
   </div>
 
@@ -1776,6 +2099,46 @@ async def _handle_http_client(
       <div class="ctrl-actions">
         <code id="st_expanded_log">{str(rt.get('expanded_log', False)).lower()}</code>
         <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="expanded_log" data-value="{'false' if rt.get('expanded_log', False) else 'true'}">Toggle</button>
+      </div>
+    </div>
+    <div class="row">
+      <div><b>System size (TX/RX + starting IPs)</b><span class="help-icon" title="Regenerates endpoints.tx/endpoints.rx using installer naming and sequential IPs. TX uses INn-BOXn, stream=n, hostname NHD-120-TX-000...n. RX uses OUTn-TVn, hostname NHD-120-RX-000...(100+n), and amx_decoder_ip = RX IP. Saved to config; restart required.">?</span></div>
+      <div class="ctrl-actions">
+        <label class="subtle" for="txCount">TX</label>
+        <input id="txCount" class="btn" style="width:72px; padding:6px 8px;" type="number" min="1" max="512" step="1" value="{snapshot['tx_configured']}"/>
+        <label class="subtle" for="txStartIp">TX start IP</label>
+        <input id="txStartIp" class="btn" style="width:140px; padding:6px 8px;" type="text" value="{html.escape(tx_start_ip)}"/>
+        <label class="subtle" for="rxCount">RX</label>
+        <input id="rxCount" class="btn" style="width:72px; padding:6px 8px;" type="number" min="1" max="512" step="1" value="{snapshot['rx_configured']}"/>
+        <label class="subtle" for="rxStartIp">RX start IP</label>
+        <input id="rxStartIp" class="btn" style="width:140px; padding:6px 8px;" type="text" value="{html.escape(rx_start_ip)}"/>
+        <button id="applyEndpointSizing" class="btn btn-primary ctrl-run" type="button" data-dt-ctl="set_endpoints">Apply</button>
+      </div>
+    </div>
+    <div class="row">
+      <div><b>Endpoint skip toggles (persisted)</b><span class="help-icon" title="Skip removes an endpoint from active runtime config after restart. This is useful when hardware is removed but you want to keep it in config for later.">?</span></div>
+      <div class="ctrl-actions"><span class="subtle">Toggle per endpoint below, then restart DriverTranslator.</span></div>
+    </div>
+    <div class="row">
+      <div><b>TX skip list</b></div>
+      <div class="table-wrap" style="width:100%;">
+        <table>
+          <thead><tr><th>TX alias</th><th>State</th><th>Action</th></tr></thead>
+          <tbody>
+            {tx_skip_html}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="row">
+      <div><b>RX skip list</b></div>
+      <div class="table-wrap" style="width:100%;">
+        <table>
+          <thead><tr><th>RX alias</th><th>State</th><th>Action</th></tr></thead>
+          <tbody>
+            {rx_skip_html}
+          </tbody>
+        </table>
       </div>
     </div>
     <div class="row">
@@ -1854,7 +2217,9 @@ async def _handle_http_client(
       document.addEventListener('keydown', (e) => {{ if (e.key === 'Escape') hideModal(); }});
 
       const ctrlBtns = document.querySelectorAll('.ctrl-run');
+      let dtBusy = false;
       function setBusy(on) {{
+        dtBusy = !!on;
         ctrlBtns.forEach((b) => {{ b.disabled = !!on; }});
       }}
 
@@ -1962,6 +2327,85 @@ async def _handle_http_client(
           }}
         }});
       }}
+
+      const applyEndpointSizing = document.getElementById('applyEndpointSizing');
+      const txCount = document.getElementById('txCount');
+      const rxCount = document.getElementById('rxCount');
+      const txStartIp = document.getElementById('txStartIp');
+      const rxStartIp = document.getElementById('rxStartIp');
+      if (applyEndpointSizing && txCount && rxCount && txStartIp && rxStartIp) {{
+        applyEndpointSizing.addEventListener('click', async () => {{
+          const txc = String(Math.max(1, Math.min(512, parseInt(txCount.value || '1', 10) || 1)));
+          const rxc = String(Math.max(1, Math.min(512, parseInt(rxCount.value || '1', 10) || 1)));
+          txCount.value = txc;
+          rxCount.value = rxc;
+          const txip = String(txStartIp.value || '').trim();
+          const rxip = String(rxStartIp.value || '').trim();
+          if (!txip || !rxip) {{
+            showModal(false, 'Missing values', 'Enter both TX and RX starting IP addresses.');
+            return;
+          }}
+          if (!confirm('Save new TX/RX sizing and starting IP ranges to config? DriverTranslator restart is required to apply.')) return;
+          setBusy(true);
+          try {{
+            const u = ctlUrl(
+              '/control/set_endpoints?tx_count=' + encodeURIComponent(txc) +
+              '&rx_count=' + encodeURIComponent(rxc) +
+              '&tx_start_ip=' + encodeURIComponent(txip) +
+              '&rx_start_ip=' + encodeURIComponent(rxip)
+            );
+            const r = await fetch(u);
+            await handleControlResponse(r, 'Endpoint sizing saved', (j) => {{
+              if (j) {{
+                const txEl = document.getElementById('st_tx_configured');
+                const rxEl = document.getElementById('st_rx_configured');
+                if (txEl && j.tx_count != null) txEl.textContent = String(j.tx_count);
+                if (rxEl && j.rx_count != null) rxEl.textContent = String(j.rx_count);
+                if (j.tx_start_ip) txStartIp.value = String(j.tx_start_ip);
+                if (j.rx_start_ip) rxStartIp.value = String(j.rx_start_ip);
+              }}
+              return 'Saved to config. Restart DriverTranslator to apply the new endpoint lists.';
+            }});
+          }} catch (e) {{
+            showModal(false, 'Network error', String(e.message || e));
+          }} finally {{
+            setBusy(false);
+          }}
+        }});
+      }}
+
+      document.querySelectorAll('[data-dt-ctl="set_endpoint_skip"]').forEach((btn) => {{
+        btn.addEventListener('click', async () => {{
+          const kind = String(btn.getAttribute('data-kind') || '').toLowerCase();
+          const alias = String(btn.getAttribute('data-alias') || '');
+          const skip = String(btn.getAttribute('data-skip') || 'true').toLowerCase();
+          if (!kind || !alias) {{
+            showModal(false, 'Invalid endpoint', 'Missing endpoint kind or alias.');
+            return;
+          }}
+          const action = (skip === 'true') ? 'skip' : 'unskip';
+          if (!confirm('Save and ' + action + ' ' + alias + '? Restart DriverTranslator to apply.')) return;
+          setBusy(true);
+          try {{
+            const u = ctlUrl(
+              '/control/set_endpoint_skip?kind=' + encodeURIComponent(kind) +
+              '&alias=' + encodeURIComponent(alias) +
+              '&skip=' + encodeURIComponent(skip)
+            );
+            const r = await fetch(u);
+            await handleControlResponse(r, 'Endpoint updated', (j) => {{
+              if (!j) return 'Saved to config. Restart DriverTranslator to apply.';
+              return String(j.kind || '').toUpperCase() + ' ' + String(j.alias || alias) +
+                ' skip is now ' + String(j.skip).toLowerCase() + '. Restart DriverTranslator to apply.';
+            }});
+            location.reload();
+          }} catch (e) {{
+            showModal(false, 'Network error', String(e.message || e));
+          }} finally {{
+            setBusy(false);
+          }}
+        }});
+      }});
 
       document.querySelectorAll('[data-dt-ctl="selftest"]').forEach((btn) => {{
         btn.addEventListener('click', async () => {{
@@ -2122,7 +2566,7 @@ async def _handle_http_client(
       }});
 
       setInterval(function () {{
-        if (!document.hidden) location.reload();
+        if (!document.hidden && !dtBusy) location.reload();
       }}, 5000);
     }})();
   </script>
