@@ -824,16 +824,6 @@ async def handle_http_client(
     .ok {{ color: #16a34a; font-weight: 600; }}
     .bad {{ color: #dc2626; font-weight: 600; }}
 
-    .links-bar {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px 16px;
-      font-size: 12px;
-      color: var(--muted);
-      margin-bottom: 8px;
-    }}
-    .links-bar a {{ font-weight: 500; }}
-
     pre {{
       white-space: pre-wrap;
       background: var(--log-bg);
@@ -912,6 +902,53 @@ async def handle_http_client(
     .help-icon:hover {{ color: var(--accent); border-color: var(--accent); }}
 
     .ctrl-actions {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
+
+    .row.row-system-size {{
+      flex-direction: column;
+      align-items: stretch;
+      gap: 12px;
+    }}
+    .row.row-system-size > .system-size-heading {{
+      padding-bottom: 0;
+    }}
+    .system-size-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px 16px;
+      align-items: end;
+      width: 100%;
+    }}
+    .sf-item {{
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }}
+    .sf-item label {{
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 500;
+    }}
+    .sf-item input {{
+      width: 100%;
+      min-width: 0;
+    }}
+    .sf-apply {{
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: flex-end;
+      justify-content: flex-start;
+      padding-top: 2px;
+    }}
+    @media (min-width: 720px) {{
+      .system-size-grid {{
+        grid-template-columns: 88px minmax(140px, 1fr) 88px minmax(140px, 1fr) auto;
+      }}
+      .sf-apply {{
+        grid-column: auto;
+        align-self: end;
+      }}
+    }}
     .ctrl-actions .ctrl-run {{
       padding: 6px 14px;
       border-radius: 8px;
@@ -954,7 +991,7 @@ async def handle_http_client(
   <div class="topbar">
     <div class="brand">
       <h1>DriverTranslator</h1>
-      <span>Status &amp; controls Â· full page reload every 5s while this tab is visible</span>
+      <span>Status &amp; controls · matrix, logs, and unrecognized commands update every 5s while this tab is visible (in-page fetch, not a full reload)</span>
     </div>
     <button class="btn" id="themeBtn" type="button">Theme</button>
   </div>
@@ -967,12 +1004,6 @@ async def handle_http_client(
     <div class="row"><div>Configured TX</div><div><code id="st_tx_configured">{snapshot['tx_configured']}</code></div></div>
     <div class="row"><div>Configured RX</div><div><code id="st_rx_configured">{snapshot['rx_configured']}</code></div></div>
     <div class="row"><div>AMX connections</div><div><code>{amx_conn}</code></div></div>
-  </div>
-
-  <div class="links-bar">
-    <a href="/status.json">status.json</a>
-    <a href="/logs.json">logs.json</a>
-    <a href="/control.json">control.json</a>
   </div>
 
   <div class="section-title">Controls</div>
@@ -1014,18 +1045,28 @@ async def handle_http_client(
         <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="expanded_log" data-value="{'false' if rt.get('expanded_log', False) else 'true'}">Toggle</button>
       </div>
     </div>
-    <div class="row">
-      <div><b>System size (TX/RX + starting IPs)</b><span class="help-icon" title="Regenerates endpoints.tx/endpoints.rx using installer naming and sequential IPs. TX uses INn-BOXn, stream=n, hostname NHD-120-TX-000...n. RX uses OUTn-TVn, hostname NHD-120-RX-000...(100+n), and amx_decoder_ip = RX IP. Saved to config; restart required.">?</span></div>
-      <div class="ctrl-actions">
-        <label class="subtle" for="txCount">TX</label>
-        <input id="txCount" class="btn" style="width:72px; padding:6px 8px;" type="number" min="1" max="512" step="1" value="{snapshot['tx_configured']}"/>
-        <label class="subtle" for="txStartIp">TX start IP</label>
-        <input id="txStartIp" class="btn" style="width:140px; padding:6px 8px;" type="text" value="{html.escape(tx_start_ip)}"/>
-        <label class="subtle" for="rxCount">RX</label>
-        <input id="rxCount" class="btn" style="width:72px; padding:6px 8px;" type="number" min="1" max="512" step="1" value="{snapshot['rx_configured']}"/>
-        <label class="subtle" for="rxStartIp">RX start IP</label>
-        <input id="rxStartIp" class="btn" style="width:140px; padding:6px 8px;" type="text" value="{html.escape(rx_start_ip)}"/>
-        <button id="applyEndpointSizing" class="btn btn-primary ctrl-run" type="button" data-dt-ctl="set_endpoints">Apply</button>
+    <div class="row row-system-size">
+      <div class="system-size-heading"><b>System size (TX/RX + starting IPs)</b><span class="help-icon" title="Regenerates endpoints.tx/endpoints.rx using installer naming and sequential IPs. TX uses INn-BOXn, stream=n, hostname NHD-120-TX-000...n. RX uses OUTn-TVn, hostname NHD-120-RX-000...(100+n), and amx_decoder_ip = RX IP. Saved to config; restart required.">?</span></div>
+      <div class="system-size-grid">
+        <div class="sf-item">
+          <label for="txCount">TX</label>
+          <input id="txCount" class="btn" style="padding:6px 8px;" type="number" min="1" max="512" step="1" value="{snapshot['tx_configured']}"/>
+        </div>
+        <div class="sf-item">
+          <label for="txStartIp">TX start IP</label>
+          <input id="txStartIp" class="btn" style="padding:6px 8px;" type="text" value="{html.escape(tx_start_ip)}"/>
+        </div>
+        <div class="sf-item">
+          <label for="rxCount">RX</label>
+          <input id="rxCount" class="btn" style="padding:6px 8px;" type="number" min="1" max="512" step="1" value="{snapshot['rx_configured']}"/>
+        </div>
+        <div class="sf-item">
+          <label for="rxStartIp">RX start IP</label>
+          <input id="rxStartIp" class="btn" style="padding:6px 8px;" type="text" value="{html.escape(rx_start_ip)}"/>
+        </div>
+        <div class="sf-apply">
+          <button id="applyEndpointSizing" class="btn btn-primary ctrl-run" type="button" data-dt-ctl="set_endpoints">Apply</button>
+        </div>
       </div>
     </div>
     <div class="row">
