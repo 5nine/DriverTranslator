@@ -4,13 +4,11 @@ import argparse
 import asyncio
 import contextlib
 import html
-import ipaddress
 import json
 import logging
 import secrets
 import socket
 import subprocess
-import threading
 import time
 import urllib.parse
 from pathlib import Path
@@ -71,10 +69,28 @@ from .http_ui_session import (
 from .log_ring import RingBufferLogHandler as _RingBufferLogHandler, get_log_tail as _get_log_tail
 from .problem_reporter import LocalProblemReporter
 from .system_control import do_reboot as _do_reboot, do_service_restart as _do_service_restart
+from .config_persistence import (
+    ctl_json as _ctl_json,
+    generate_endpoints_from_size as _generate_endpoints_from_size,
+    load_endpoint_inventory as _load_endpoint_inventory,
+    persist_endpoint_skip_to_config as _persist_endpoint_skip_to_config,
+    persist_endpoints_to_config as _persist_endpoints_to_config,
+    persist_runtime_setting_to_config as _persist_runtime_setting_to_config,
+)
+from .http_helpers import (
+    build_status_snapshot as _build_status_snapshot,
+    control_feedback_html as _control_feedback_html,
+    format_uptime as _format_uptime,
+    http_response as _http_response,
+    http_unauthorized as _http_unauthorized,
+    params_want_html as _params_want_html,
+    parse_basic_auth_password as _parse_basic_auth_password,
+)
 
 # Quick index (major sections in this file):
 # - Unknown-command tracking: unknown_ctl.py
-# - Config loading/validation: config_loader.py
+# - Config loading/validation: config_loader.py; JSON edits: config_persistence.py
+# - HTTP response/snapshot helpers: http_helpers.py
 # - TCP/AMX: networking.py, amx_protocol.py, amx_client.py
 # - Log ring: log_ring.py; HTTP UI session tokens: http_ui_session.py
 # - LocalProblemReporter: problem_reporter.py; reboot/restart: system_control.py
@@ -84,165 +100,7 @@ from .system_control import do_reboot as _do_reboot, do_service_restart as _do_s
 # - Server bootstrap + process entrypoint
 LOG = logging.getLogger("drivertranslator")
 
-_config_write_lock = threading.Lock()
 _TX_STATUS_POLL_INTERVAL_SECONDS = 30
-
-
-def _persist_runtime_setting_to_config(*, config_path: str, key: str, value: Any) -> None:
-    mapping: Dict[str, Tuple[str, str]] = {
-        "amx_dry_run": ("amx", "dry_run"),
-        "amx_persistent": ("amx", "persistent"),
-        "amx_verify_after_set": ("amx", "verify_after_set"),
-        "amx_verify_timeout_ms": ("amx", "verify_timeout_ms"),
-        "expanded_log": ("server", "expanded_log"),
-    }
-    target = mapping.get(key)
-    if target is None:
-        return
-    section, leaf = target
-    path = Path(config_path).expanduser().resolve()
-    with _config_write_lock:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        obj = raw.get(section)
-        if not isinstance(obj, dict):
-            obj = {}
-            raw[section] = obj
-        obj[leaf] = value
-        path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
-
-
-def _generate_endpoints_from_size(
-    *,
-    tx_count: int,
-    rx_count: int,
-    tx_start_ip: str,
-    rx_start_ip: str,
-) -> Dict[str, List[Dict[str, Any]]]:
-    if tx_count <= 0 or rx_count <= 0:
-        raise ValueError("TX and RX counts must be greater than zero.")
-    # Keep a practical upper bound for a web-entered size.
-    if tx_count > 512 or rx_count > 512:
-        raise ValueError("TX and RX counts must be between 1 and 512.")
-
-    tx_start = ipaddress.IPv4Address(tx_start_ip.strip())
-    rx_start = ipaddress.IPv4Address(rx_start_ip.strip())
-
-    tx: List[Dict[str, Any]] = []
-    for i in range(tx_count):
-        n = i + 1
-        ip = str(tx_start + i)
-        tx.append(
-            {
-                "alias": f"IN{n}-BOX{n}",
-                "hostname": f"NHD-120-TX-{n:012d}",
-                "ip": ip,
-                "amx_stream": n,
-            }
-        )
-
-    rx: List[Dict[str, Any]] = []
-    for i in range(rx_count):
-        n = i + 1
-        ip = str(rx_start + i)
-        rx.append(
-            {
-                "alias": f"OUT{n}-TV{n}",
-                "hostname": f"NHD-120-RX-{(100 + n):012d}",
-                "ip": ip,
-                "amx_decoder_ip": ip,
-            }
-        )
-    return {"tx": tx, "rx": rx}
-
-
-def _persist_endpoints_to_config(
-    *,
-    config_path: str,
-    tx_count: int,
-    rx_count: int,
-    tx_start_ip: str,
-    rx_start_ip: str,
-) -> Dict[str, Any]:
-    endpoints = _generate_endpoints_from_size(
-        tx_count=tx_count,
-        rx_count=rx_count,
-        tx_start_ip=tx_start_ip,
-        rx_start_ip=rx_start_ip,
-    )
-    path = Path(config_path).expanduser().resolve()
-    with _config_write_lock:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        raw["endpoints"] = endpoints
-        path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
-    return {
-        "ok": True,
-        "tx_count": tx_count,
-        "rx_count": rx_count,
-        "tx_start_ip": str(ipaddress.IPv4Address(tx_start_ip.strip())),
-        "rx_start_ip": str(ipaddress.IPv4Address(rx_start_ip.strip())),
-        "restart_required": True,
-    }
-
-
-def _load_endpoint_inventory(*, config_path: str) -> Dict[str, List[Dict[str, Any]]]:
-    path = Path(config_path).expanduser().resolve()
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    endpoints = raw.get("endpoints", {}) if isinstance(raw, dict) else {}
-    out: Dict[str, List[Dict[str, Any]]] = {"tx": [], "rx": []}
-    for kind in ("tx", "rx"):
-        rows = endpoints.get(kind, [])
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            alias = str(row.get("alias", "")).strip()
-            if not alias:
-                continue
-            # Keep skip parsing consistent with runtime config loading.
-            out[kind].append({"alias": alias, "skip": _as_bool(row.get("skip"), default=False)})
-    return out
-
-
-def _persist_endpoint_skip_to_config(*, config_path: str, kind: str, alias: str, skip: bool) -> Dict[str, Any]:
-    if kind not in ("tx", "rx"):
-        raise ValueError("kind must be 'tx' or 'rx'.")
-    alias_s = alias.strip()
-    if not alias_s:
-        raise ValueError("alias is required.")
-    path = Path(config_path).expanduser().resolve()
-    with _config_write_lock:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        endpoints = raw.get("endpoints")
-        if not isinstance(endpoints, dict):
-            raise ValueError("config missing endpoints section.")
-        rows = endpoints.get(kind)
-        if not isinstance(rows, list):
-            raise ValueError(f"config endpoints.{kind} is not a list.")
-        found = False
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            if str(row.get("alias", "")).strip() == alias_s:
-                row["skip"] = bool(skip)
-                found = True
-                break
-        if not found:
-            raise ValueError(f"{kind.upper()} alias not found: {alias_s}")
-        path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
-    return {
-        "ok": True,
-        "kind": kind,
-        "alias": alias_s,
-        "skip": bool(skip),
-        "restart_required": True,
-    }
-
-
-def _ctl_json(v: Any) -> str:
-    s = json.dumps(v, separators=(", ", " : "), ensure_ascii=False)
-    s = s.replace("{", "{ ").replace("}", " }").replace("[", "[ ").replace("]", " ]")
-    return s
 
 
 async def _amx_self_test(*, cfg: Config, amx: Any) -> Dict[str, Any]:
@@ -276,172 +134,6 @@ async def _amx_self_test(*, cfg: Config, amx: Any) -> Dict[str, Any]:
 
     return {"ok": ok, "total": len(active_rx), "unreachable": unreachable}
 
-
-def _http_response(status: str, content_type: str, body: bytes) -> bytes:
-    headers = [
-        f"HTTP/1.1 {status}",
-        f"Content-Type: {content_type}",
-        f"Content-Length: {len(body)}",
-        "Connection: close",
-        "",
-        "",
-    ]
-    return "\r\n".join(headers).encode("ascii") + body
-
-
-def _params_want_html(params: Dict[str, str]) -> bool:
-    return (params.get("html") or "").lower() in ("1", "true", "yes", "on")
-
-
-def _control_feedback_html(
-    *,
-    ok: bool,
-    headline: str,
-    paragraphs: List[str],
-    pre_json: Optional[Any] = None,
-) -> bytes:
-    status_cls = "banner-ok" if ok else "banner-bad"
-    paras = "".join(f"<p class=\"detail\">{html.escape(p)}</p>" for p in paragraphs)
-    pre_block = ""
-    if pre_json is not None:
-        pre_block = (
-            "<p class=\"detail\"><b>Details (JSON)</b></p><pre>"
-            + html.escape(json.dumps(pre_json, indent=2))
-            + "</pre>"
-        )
-    page = f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>{html.escape(headline)} — DriverTranslator</title>
-  <style>
-    :root {{ color-scheme: light dark; }}
-    body {{
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      margin: 0; min-height: 100vh;
-      padding: 28px 20px 48px;
-      background: #f4f6f9; color: #0f172a;
-      line-height: 1.5;
-    }}
-    @media (prefers-color-scheme: dark) {{
-      body {{ background: #0f1218; color: #e8eaef; }}
-    }}
-    .wrap {{ max-width: 560px; margin: 0 auto; }}
-    .banner {{
-      padding: 22px 24px; border-radius: 14px; margin-bottom: 20px;
-      font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-    }}
-    .banner-ok {{ background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%); color: #14532d; border: 1px solid #86efac; }}
-    .banner-bad {{ background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); color: #7f1d1d; border: 1px solid #fca5a5; }}
-    @media (prefers-color-scheme: dark) {{
-      .banner-ok {{ background: linear-gradient(135deg, #14532d 0%, #166534 100%); color: #bbf7d0; border-color: #22c55e; }}
-      .banner-bad {{ background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%); color: #fecaca; border-color: #ef4444; }}
-    }}
-    .detail {{ margin: 0 0 14px 0; color: #64748b; font-size: 15px; }}
-    @media (prefers-color-scheme: dark) {{ .detail {{ color: #9aa3b2; }} }}
-    pre {{
-      background: #0f172a; color: #e2e8f0; padding: 16px 18px; border-radius: 12px;
-      overflow-x: auto; font-size: 12px; line-height: 1.45; border: 1px solid #334155;
-    }}
-    a {{
-      display: inline-block; margin-top: 8px; color: #2563eb; font-weight: 600;
-      text-decoration: none; padding: 10px 0;
-    }}
-    a:hover {{ text-decoration: underline; }}
-    @media (prefers-color-scheme: dark) {{ a {{ color: #7aa2ff; }} }}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="banner {status_cls}">{html.escape(headline)}</div>
-    {paras}
-    {pre_block}
-    <p><a href="/">← Back to status</a></p>
-  </div>
-</body>
-</html>"""
-    return page.encode("utf-8")
-
-
-def _http_unauthorized() -> bytes:
-    # Basic auth (password-only semantics; username ignored)
-    headers = [
-        "HTTP/1.1 401 Unauthorized",
-        'WWW-Authenticate: Basic realm="DriverTranslator"',
-        "Content-Type: text/plain",
-        "Content-Length: 12",
-        "Connection: close",
-        "",
-        "",
-    ]
-    return "\r\n".join(headers).encode("ascii") + b"unauthorized"
-
-
-def _parse_basic_auth_password(data: bytes) -> Optional[str]:
-    try:
-        text = data.decode("iso-8859-1", errors="replace")
-    except Exception:
-        return None
-    # Look for Authorization header in the initial read buffer
-    for line in text.split("\r\n"):
-        if line.lower().startswith("authorization:"):
-            v = line.split(":", 1)[1].strip()
-            if not v.lower().startswith("basic "):
-                return None
-            import base64
-
-            b64 = v.split(None, 1)[1].strip()
-            try:
-                raw = base64.b64decode(b64).decode("utf-8", errors="replace")
-            except Exception:
-                return None
-            # raw is "user:pass"
-            if ":" in raw:
-                return raw.split(":", 1)[1]
-            return ""
-    return None
-
-
-def _format_uptime(seconds: int) -> str:
-    seconds = max(0, int(seconds))
-    days, rem = divmod(seconds, 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes, secs = divmod(rem, 60)
-    parts: List[str] = []
-    if days:
-        parts.append(f"{days}d")
-    if hours or days:
-        parts.append(f"{hours}h")
-    if minutes or hours or days:
-        parts.append(f"{minutes}m")
-    parts.append(f"{secs:02d}s")
-    return " ".join(parts)
-
-
-def _build_status_snapshot(*, cfg: Config, health: HealthState, amx: Any, started_at: float) -> Dict[str, Any]:
-    now = time.monotonic()
-    mode = "dry_run" if cfg.amx_dry_run else ("persistent" if cfg.amx_persistent else "connect_close")
-
-    amx_connected = None
-    amx_total_known = None
-    if hasattr(amx, "connection_summary"):
-        try:
-            amx_connected, amx_total_known = amx.connection_summary()
-        except Exception:
-            amx_connected, amx_total_known = None, None
-
-    uptime_seconds = int(now - started_at)
-    return {
-        "uptime_seconds": uptime_seconds,
-        "mode": mode,
-        "rti_clients": health.rti_clients,
-        "tx_configured": len(cfg.tx_by_alias),
-        "rx_configured": len(cfg.rx_by_alias),
-        "amx_connected": amx_connected,
-        "amx_total_known": amx_total_known,
-    }
 
 # ---------------------------------------------------------------------------
 # HTTP status and control surface
