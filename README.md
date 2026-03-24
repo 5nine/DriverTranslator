@@ -21,6 +21,37 @@ sudo git clone https://github.com/5nine/DriverTranslator.git /opt/drivertranslat
 cd /opt/drivertranslator
 ```
 
+### Using a specific Git branch (e.g. `refactor/split-main-modules`)
+
+**Fresh clone on that branch:**
+
+```bash
+sudo git clone -b refactor/split-main-modules https://github.com/5nine/DriverTranslator.git /opt/drivertranslator
+```
+
+**Already cloned** (switch branches):
+
+```bash
+cd /opt/drivertranslator
+sudo git fetch origin
+sudo git checkout refactor/split-main-modules
+sudo git pull origin refactor/split-main-modules
+```
+
+Pure-Python refactors usually do **not** require reinstalling the venv. Restart the service so the running process loads the new code:
+
+```bash
+sudo systemctl restart drivertranslator
+```
+
+Smoke-test manually (adjust paths if your install differs):
+
+```bash
+/opt/drivertranslator/.venv/bin/python -m drivertranslator --config /opt/drivertranslator/config.json --listen 0.0.0.0 --port 2323 --log-level INFO
+```
+
+Press `Ctrl+C` to exit. If the manual run works but the service fails, check `journalctl -u drivertranslator -e`.
+
 2. Run the installer:
 
 ```bash
