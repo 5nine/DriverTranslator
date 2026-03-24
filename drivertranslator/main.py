@@ -4298,8 +4298,10 @@ async def handle_client(
                 failures: List[Tuple[str, str, str]] = []
                 status_by_rx: Dict[str, Dict[str, str]] = {}
                 try:
+                    # For matrix set, mirror the raw incoming command exactly.
+                    # old (normalized mirror): cfg, amx, state, line_norm, runtime.amx_verify_timeout_ms
                     ok, resp, failures, status_by_rx = await _handle_matrix_set(
-                        cfg, amx, state, line_norm, runtime.amx_verify_timeout_ms
+                        cfg, amx, state, line, runtime.amx_verify_timeout_ms
                     )
                     if ok:
                         tx_token = parts[2]
@@ -4453,7 +4455,9 @@ async def handle_client(
                                     "amx.breakaway.video", f"DT: ERROR AMX breakaway video route failed: {e}"
                                 )
 
-                        _write_rti_line(line_norm)  # command mirror ack
+                        # For matrix <kind> set, mirror the raw incoming command exactly.
+                        # old (normalized mirror): _write_rti_line(line_norm)
+                        _write_rti_line(line)  # command mirror ack
                         await writer.drain()
                         continue
 
