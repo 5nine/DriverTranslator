@@ -4497,8 +4497,6 @@ async def handle_client(
                     matrix_lines = _format_matrix_info(
                         heading="matrix", mapping=state.video, rx_aliases=rx_aliases_m
                     )
-                    # Debug: log exact matrix-get payload emitted to RTI.
-                    LOG.info("RTI <- matrix get payload lines=%s", matrix_lines)
                     for resp_line in matrix_lines:
                         _write_rti_line(resp_line)
                         await writer.drain()
@@ -4507,7 +4505,6 @@ async def handle_client(
                     await writer.drain()
                     _write_rti_line("")
                     await writer.drain()
-                    LOG.info("RTI <- matrix get payload terminator=CRLF,CRLF")
                     continue
                 # Examples:
                 # matrix video get [<RX...>]
@@ -4546,8 +4543,6 @@ async def handle_client(
                     matrix_lines = _format_matrix_info(
                         heading=f"matrix {kind}", mapping=table, rx_aliases=rx_aliases
                     )
-                    # Debug: log exact matrix-breakaway-get payload emitted to RTI.
-                    LOG.info("RTI <- matrix %s get payload lines=%s", kind, matrix_lines)
                     for resp_line in matrix_lines:
                         _write_rti_line(resp_line)
                         await writer.drain()
@@ -4556,7 +4551,6 @@ async def handle_client(
                     await writer.drain()
                     _write_rti_line("")
                     await writer.drain()
-                    LOG.info("RTI <- matrix %s get payload terminator=CRLF,CRLF", kind)
                     continue
 
             if lower.startswith("config set session alias "):
