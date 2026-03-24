@@ -5,11 +5,11 @@ import contextlib
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from .amx_protocol import log_amx_inbound, parse_amx_status
+from .amx_protocol import hdmi_enabled_from_status_fields, log_amx_inbound, parse_amx_status
 from .http_status import TX_STATUS_POLL_INTERVAL_SECONDS
 from .models import Config, ControllerState, RuntimeSettings, Rx
 from .networking import open_connection
-from .protocol_helpers import hdmi_enabled_from_status_fields, lookup_rx, lookup_tx
+from .protocol_helpers import lookup_rx, lookup_tx
 from .utils import rx_alias_sort_key, tx_alias_sort_key
 
 LOG = logging.getLogger("drivertranslator")
