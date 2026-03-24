@@ -6,13 +6,73 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from .amx_protocol import hdmi_enabled_from_status_fields, log_amx_inbound, parse_amx_status
-from .http_status import TX_STATUS_POLL_INTERVAL_SECONDS
+from .constants import TX_STATUS_POLL_INTERVAL_SECONDS
 from .models import Config, ControllerState, RuntimeSettings, Rx
 from .networking import open_connection
 from .protocol_helpers import lookup_rx, lookup_tx
 from .utils import rx_alias_sort_key, tx_alias_sort_key
 
 LOG = logging.getLogger("drivertranslator")
+
+
+async def apply_amx_command_to_rx_aliases(
+    *,
+    cfg: Config,
+    amx: Any,
+    state: ControllerState,
+    rx_aliases: List[str],
+    command: str,
+    timeout_ms: int,
+) -> Tuple[List[Tuple[str, str, str]], Dict[str, Dict[str, str]]]:
+    rx_aliases_active = [a for a in rx_aliases if a in cfg.rx_by_alias and a not in cfg.rx_skipped_aliases]
+    if not rx_aliases_active:
+        return [], {}
+    failures: List[Tuple[str, str, str]] = []
+    status_by_rx: Dict[str, Dict[str, str]] = {}
+    if hasattr(amx, "send_command_with_status"):
+        results = await asyncio.gather(
+            *(
+                amx.send_command_with_status(
+                    decoder_ip=cfg.rx_by_alias[a].amx_decoder_ip,
+                    command=command,
+                    timeout_ms=timeout_ms,
+                )
+                for a in rx_aliases_active
+            ),
+            return_exceptions=True,
+        )
+        for a, res in zip(rx_aliases_active, results):
+            if isinstance(res, BaseException):
+                failures.append((a, cfg.rx_by_alias[a].amx_decoder_ip, str(res)))
+                state.set_rx_online(a, False)
+                state.set_rx_hdmi_output(a, None)
+            else:
+                state.set_rx_online(a, True)
+                fields = res if isinstance(res, dict) else {}
+                status_by_rx[a] = fields
+                state.set_rx_hdmi_output(a, hdmi_enabled_from_status_fields(fields))
+        return failures, status_by_rx
+
+    if hasattr(amx, "send_command"):
+        results = await asyncio.gather(
+            *(
+                amx.send_command(
+                    decoder_ip=cfg.rx_by_alias[a].amx_decoder_ip,
+                    command=command,
+                )
+                for a in rx_aliases_active
+            ),
+            return_exceptions=True,
+        )
+        for a, res in zip(rx_aliases_active, results):
+            if isinstance(res, BaseException):
+                failures.append((a, cfg.rx_by_alias[a].amx_decoder_ip, str(res)))
+                state.set_rx_online(a, False)
+                state.set_rx_hdmi_output(a, None)
+            else:
+                state.set_rx_online(a, True)
+    return failures, status_by_rx
+
 
 async def handle_matrix_set(
     cfg: Config, amx: Any, state: ControllerState, cmd: str, timeout_ms: int
@@ -228,62 +288,3 @@ class TxStatusPoller:
                 await refresh_tx_statuses(cfg=self._cfg, state=self._state, runtime=self._runtime)
             except Exception:
                 LOG.exception("TX status poll failed")
-
-
-async def apply_amx_command_to_rx_aliases(
-    *,
-    cfg: Config,
-    amx: Any,
-    state: ControllerState,
-    rx_aliases: List[str],
-    command: str,
-    timeout_ms: int,
-) -> Tuple[List[Tuple[str, str, str]], Dict[str, Dict[str, str]]]:
-    rx_aliases_active = [a for a in rx_aliases if a in cfg.rx_by_alias and a not in cfg.rx_skipped_aliases]
-    if not rx_aliases_active:
-        return [], {}
-    failures: List[Tuple[str, str, str]] = []
-    status_by_rx: Dict[str, Dict[str, str]] = {}
-    if hasattr(amx, "send_command_with_status"):
-        results = await asyncio.gather(
-            *(
-                amx.send_command_with_status(
-                    decoder_ip=cfg.rx_by_alias[a].amx_decoder_ip,
-                    command=command,
-                    timeout_ms=timeout_ms,
-                )
-                for a in rx_aliases_active
-            ),
-            return_exceptions=True,
-        )
-        for a, res in zip(rx_aliases_active, results):
-            if isinstance(res, BaseException):
-                failures.append((a, cfg.rx_by_alias[a].amx_decoder_ip, str(res)))
-                state.set_rx_online(a, False)
-                state.set_rx_hdmi_output(a, None)
-            else:
-                state.set_rx_online(a, True)
-                fields = res if isinstance(res, dict) else {}
-                status_by_rx[a] = fields
-                state.set_rx_hdmi_output(a, hdmi_enabled_from_status_fields(fields))
-        return failures, status_by_rx
-
-    if hasattr(amx, "send_command"):
-        results = await asyncio.gather(
-            *(
-                amx.send_command(
-                    decoder_ip=cfg.rx_by_alias[a].amx_decoder_ip,
-                    command=command,
-                )
-                for a in rx_aliases_active
-            ),
-            return_exceptions=True,
-        )
-        for a, res in zip(rx_aliases_active, results):
-            if isinstance(res, BaseException):
-                failures.append((a, cfg.rx_by_alias[a].amx_decoder_ip, str(res)))
-                state.set_rx_online(a, False)
-                state.set_rx_hdmi_output(a, None)
-            else:
-                state.set_rx_online(a, True)
-    return failures, status_by_rx

@@ -43,11 +43,11 @@ from .unknown_ctl import (
     page_text as unknown_ctl_page_text,
     persist_file as unknown_ctl_persist_file,
 )
+from .constants import TX_STATUS_POLL_INTERVAL_SECONDS
 from .utils import as_bool, rx_alias_sort_key, tx_alias_sort_key
 
 LOG = logging.getLogger("drivertranslator")
 
-TX_STATUS_POLL_INTERVAL_SECONDS = 30
 
 async def handle_http_client(
     reader: asyncio.StreamReader,
