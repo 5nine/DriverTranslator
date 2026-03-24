@@ -14,8 +14,8 @@ ENV/
 # Logs
 *.log
 
-# Local secrets / machine-specific overrides (optional)
-config.local.json
+# Local config (keep example committed)
+config.json
 
 # OS / editor
 .DS_Store
