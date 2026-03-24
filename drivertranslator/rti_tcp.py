@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List, Optional
 
-from .matrix_amx import apply_amx_command_to_rx_aliases, handle_matrix_set
+from .matrix_amx import apply_amx_command_to_rx_aliases, process_matrix_set_line
 from .models import Config, ControllerState, HealthState, NhdCtlSession, RuntimeSettings
 from .nhd_ctl_handlers import handle_config_get, handle_multiview_get, handle_videowall_get
 from .networking import crlf_line
@@ -153,91 +153,16 @@ async def handle_client(
 
             # Handle known commands.
             if len(parts) >= 4 and parts_lower[:2] == ["matrix", "set"]:
-                ok = False
-                resp = "unknown command"
-                failures: List[Tuple[str, str, str]] = []
-                status_by_rx: Dict[str, Dict[str, str]] = {}
-                try:
-                    # For matrix set, mirror the raw incoming command exactly.
-                    # old (normalized mirror): cfg, amx, state, line_norm, runtime.amx_verify_timeout_ms
-                    ok, resp, failures, status_by_rx = await handle_matrix_set(
-                        cfg, amx, state, line, runtime.amx_verify_timeout_ms
-                    )
-                    if ok:
-                        tx_token = parts[2]
-                        tx_alias: Optional[str]
-                        if tx_token.upper() == "NULL":
-                            tx_alias = None
-                        else:
-                            tx_obj = lookup_tx(cfg, tx_token)
-                            tx_alias = tx_obj.alias if tx_obj is not None else None
-
-                        rx_aliases: List[str] = []
-                        for tok in parts[3:]:
-                            rx_obj = lookup_rx(cfg, tok)
-                            if rx_obj is not None:
-                                rx_aliases.append(rx_obj.alias)
-                        state.set_all_media(tx_alias=tx_alias, rx_aliases=rx_aliases)
-                        # Prefer AMX-reported STREAM for touched RXs; if missing/unusable, fall back to NULL.
-                        if tx_alias is not None:
-                            failed_rx = {rx_a for (rx_a, _ip, _err) in failures}
-                            for rx_a in rx_aliases:
-                                if rx_a in failed_rx:
-                                    state.set_rx_all_media(rx_alias=rx_a, tx_alias=None)
-                                    continue
-                                stream_reported = (status_by_rx.get(rx_a, {}).get("STREAM") or "").strip()
-                                # If AMX did not return status for this RX (e.g. skipped/non-polled),
-                                # keep the requested route instead of forcing NULL.
-                                if not stream_reported:
-                                    state.set_rx_all_media(rx_alias=rx_a, tx_alias=tx_alias)
-                                else:
-                                    amx_tx_alias = tx_alias_from_amx_stream(cfg, stream_reported)
-                                    state.set_rx_all_media(
-                                        rx_alias=rx_a,
-                                        tx_alias=(amx_tx_alias if amx_tx_alias is not None else tx_alias),
-                                    )
-
-                        # Optional AMX verification (problems-only)
-                        if (not cfg.amx_dry_run) and runtime.amx_verify_after_set and tx_alias is not None:
-                            tx_obj2 = lookup_tx(cfg, tx_alias)
-                            expected = str(tx_obj2.amx_stream) if tx_obj2 is not None else None
-                            if expected:
-                                for rx_a in rx_aliases:
-                                    ip = cfg.rx_by_alias[rx_a].amx_decoder_ip
-                                    got = (status_by_rx.get(rx_a, {}).get("STREAM") or "").strip()
-                                    if got != expected:
-                                        await notifier.problem(
-                                            f"amx.verify.{ip}",
-                                            f"DT: ERROR AMX verify failed: {rx_a} expected STREAM {expected}",
-                                        )
-                except Exception as e:
-                    LOG.exception("AMX routing failed")
-                    await notifier.problem("amx.route", f"DT: ERROR AMX route failed: {e}")
-                    # Keep RTI driver happy: still mirror the command as success.
-                    ok, resp = True, line
-
-                if failures:
-                    for (rx_a, ip, err) in failures:
-                        LOG.error("AMX SEND FAIL route decoder=%s rx=%s cmd=%r err=%s", ip, rx_a, f"set:{tx_obj.amx_stream}" if tx_obj is not None else "set:<unknown>", err)
-                        state.set_rx_online(rx_a, False)
-                        await notifier.problem(f"amx.set.{ip}", f"DT: ERROR AMX route failed: {rx_a} ({ip}): {err}")
-                    await notifier.problem(
-                        "amx.route.partial",
-                        "DT: ERROR AMX route failed on: "
-                        + ", ".join(f"{rx_a}({ip})" for (rx_a, ip, _e) in failures[:3])
-                        + (" ..." if len(failures) > 3 else ""),
-                    )
-                else:
-                    # Mark RX as online on successful send
-                    try:
-                        for tok in parts[3:]:
-                            rx_obj = lookup_rx(cfg, tok)
-                            if rx_obj is not None:
-                                state.set_rx_online(rx_obj.alias, True)
-                    except Exception:
-                        pass
-
-                _write_rti_line(resp if ok else "unknown command")
+                outcome = await process_matrix_set_line(
+                    cfg,
+                    amx,
+                    state,
+                    line,
+                    runtime.amx_verify_timeout_ms,
+                    runtime,
+                    notifier,
+                )
+                _write_rti_line(outcome.rti_response)
                 await writer.drain()
                 continue
 

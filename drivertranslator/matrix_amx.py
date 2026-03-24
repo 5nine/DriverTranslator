@@ -3,13 +3,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from .amx_protocol import hdmi_enabled_from_status_fields, log_amx_inbound, parse_amx_status
 from .constants import TX_STATUS_POLL_INTERVAL_SECONDS
 from .models import Config, ControllerState, RuntimeSettings, Rx
 from .networking import open_connection
-from .protocol_helpers import lookup_rx, lookup_tx
+from .problem_reporter import LocalProblemReporter
+from .protocol_helpers import lookup_rx, lookup_tx, tx_alias_from_amx_stream
 from .utils import rx_alias_sort_key, tx_alias_sort_key
 
 LOG = logging.getLogger("drivertranslator")
@@ -118,6 +120,135 @@ async def handle_matrix_set(
 
     # WyreStorm ack is a "command mirror"
     return True, cmd, failures, status_by_rx
+
+
+@dataclass(frozen=True)
+class MatrixSetLineResult:
+    """Outcome of primary `matrix set <TX> <RX...>` (same path as RTI TCP)."""
+
+    rti_ok: bool
+    rti_response: str
+    failures: Tuple[Tuple[str, str, str], ...]
+    exception_occurred: bool
+
+
+async def process_matrix_set_line(
+    cfg: Config,
+    amx: Any,
+    state: ControllerState,
+    line: str,
+    timeout_ms: int,
+    runtime: RuntimeSettings,
+    notifier: LocalProblemReporter,
+) -> MatrixSetLineResult:
+    """
+    Run AMX routing and ControllerState updates for a primary matrix set line.
+    Matches RTI TCP behavior (including mirror-on-exception for drivers).
+    """
+    parts = line.split()
+    parts_lower = [p.lower() for p in parts]
+    ok = False
+    resp = "unknown command"
+    failures: List[Tuple[str, str, str]] = []
+    status_by_rx: Dict[str, Dict[str, str]] = {}
+    exception_occurred = False
+
+    if len(parts) < 4 or parts_lower[:2] != ["matrix", "set"]:
+        return MatrixSetLineResult(
+            rti_ok=False,
+            rti_response="unknown command",
+            failures=(),
+            exception_occurred=False,
+        )
+
+    tx_token = parts[2]
+    tx_obj_for_log = lookup_tx(cfg, tx_token) if tx_token.upper() != "NULL" else None
+
+    try:
+        ok, resp, failures, status_by_rx = await handle_matrix_set(
+            cfg, amx, state, line, timeout_ms
+        )
+        if ok:
+            tx_alias: Optional[str]
+            if tx_token.upper() == "NULL":
+                tx_alias = None
+            else:
+                tx_o = lookup_tx(cfg, tx_token)
+                tx_alias = tx_o.alias if tx_o is not None else None
+
+            rx_aliases: List[str] = []
+            for tok in parts[3:]:
+                rx_obj = lookup_rx(cfg, tok)
+                if rx_obj is not None:
+                    rx_aliases.append(rx_obj.alias)
+            state.set_all_media(tx_alias=tx_alias, rx_aliases=rx_aliases)
+            if tx_alias is not None:
+                failed_rx = {rx_a for (rx_a, _ip, _err) in failures}
+                for rx_a in rx_aliases:
+                    if rx_a in failed_rx:
+                        state.set_rx_all_media(rx_alias=rx_a, tx_alias=None)
+                        continue
+                    stream_reported = (status_by_rx.get(rx_a, {}).get("STREAM") or "").strip()
+                    if not stream_reported:
+                        state.set_rx_all_media(rx_alias=rx_a, tx_alias=tx_alias)
+                    else:
+                        amx_tx_alias = tx_alias_from_amx_stream(cfg, stream_reported)
+                        state.set_rx_all_media(
+                            rx_alias=rx_a,
+                            tx_alias=(amx_tx_alias if amx_tx_alias is not None else tx_alias),
+                        )
+
+            if (not cfg.amx_dry_run) and runtime.amx_verify_after_set and tx_alias is not None:
+                tx_obj2 = lookup_tx(cfg, tx_alias)
+                expected = str(tx_obj2.amx_stream) if tx_obj2 is not None else None
+                if expected:
+                    for rx_a in rx_aliases:
+                        ip = cfg.rx_by_alias[rx_a].amx_decoder_ip
+                        got = (status_by_rx.get(rx_a, {}).get("STREAM") or "").strip()
+                        if got != expected:
+                            await notifier.problem(
+                                f"amx.verify.{ip}",
+                                f"DT: ERROR AMX verify failed: {rx_a} expected STREAM {expected}",
+                            )
+    except Exception as e:
+        LOG.exception("AMX routing failed")
+        await notifier.problem("amx.route", f"DT: ERROR AMX route failed: {e}")
+        exception_occurred = True
+        ok, resp = True, line
+
+    if failures:
+        for (rx_a, ip, err) in failures:
+            stream_s = str(tx_obj_for_log.amx_stream) if tx_obj_for_log is not None else "<unknown>"
+            LOG.error(
+                "AMX SEND FAIL route decoder=%s rx=%s cmd=%r err=%s",
+                ip,
+                rx_a,
+                f"set:{stream_s}",
+                err,
+            )
+            state.set_rx_online(rx_a, False)
+            await notifier.problem(f"amx.set.{ip}", f"DT: ERROR AMX route failed: {rx_a} ({ip}): {err}")
+        await notifier.problem(
+            "amx.route.partial",
+            "DT: ERROR AMX route failed on: "
+            + ", ".join(f"{rx_a}({ip})" for (rx_a, ip, _e) in failures[:3])
+            + (" ..." if len(failures) > 3 else ""),
+        )
+    else:
+        try:
+            for tok in parts[3:]:
+                rx_obj = lookup_rx(cfg, tok)
+                if rx_obj is not None:
+                    state.set_rx_online(rx_obj.alias, True)
+        except Exception:
+            pass
+
+    return MatrixSetLineResult(
+        rti_ok=ok,
+        rti_response=resp if ok else "unknown command",
+        failures=tuple(failures),
+        exception_occurred=exception_occurred,
+    )
 
 
 async def refresh_hdmi_outputs(*, cfg: Config, amx: Any, state: ControllerState, timeout_ms: int) -> None:

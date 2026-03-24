@@ -6,7 +6,7 @@ import html
 import json
 import logging
 import urllib.parse
-from typing import Any, Awaitable, Callable, Dict
+from typing import Any, Awaitable, Callable, Dict, List
 
 from .av_scan import (
     check_av_bind_address,
@@ -37,6 +37,7 @@ from .http_ui_session import (
     valid_session_token as http_ui_sess_valid,
 )
 from .log_ring import get_log_tail
+from .matrix_amx import process_matrix_set_line
 from .models import (
     Config,
     ControllerState,
@@ -44,6 +45,7 @@ from .models import (
     ProblemState,
     RuntimeSettings,
 )
+from .problem_reporter import LocalProblemReporter
 from .protocol_helpers import format_tx_signal
 from .system_control import do_reboot, do_service_restart
 from .unknown_ctl import (
@@ -70,6 +72,7 @@ async def handle_http_client(
     started_at: float,
     config_path: str,
     amx_self_test: Callable[..., Awaitable[Dict[str, Any]]],
+    notifier: LocalProblemReporter,
 ) -> None:
     try:
         try:
@@ -141,6 +144,7 @@ async def handle_http_client(
         # /control/av_scan_abort[&token=]
         # /control/av_scan?range=<cidr|start-end>[&token=]
         # /control/add_av_endpoints?tx_ips=a,b&rx_ips=c,d[&token=]
+        # /control/matrix_set?tx=<TX|NULL>&rx=<RX>
         if path.startswith("/control/"):
             # very small query parsing (no urllib dependency)
             qs = ""
@@ -567,6 +571,73 @@ async def handle_http_client(
                     writer.write(http_response("200 OK", "application/json", body))
                 return
 
+            if path.startswith("/control/matrix_set"):
+                tx = urllib.parse.unquote_plus(params.get("tx", "").strip())
+                rx = urllib.parse.unquote_plus(params.get("rx", "").strip())
+                if not rx:
+                    body = (json.dumps({"ok": False, "error": "missing rx parameter"}) + "\n").encode("utf-8")
+                    writer.write(http_response("400 Bad Request", "application/json", body))
+                    return
+                if tx.upper() == "NULL" or tx == "":
+                    cmd_line = f"matrix set NULL {rx}"
+                else:
+                    if tx not in cfg.tx_by_alias:
+                        body = (json.dumps({"ok": False, "error": "unknown tx alias"}) + "\n").encode("utf-8")
+                        writer.write(http_response("400 Bad Request", "application/json", body))
+                        return
+                    cmd_line = f"matrix set {tx} {rx}"
+                if rx not in cfg.rx_by_alias:
+                    body = (json.dumps({"ok": False, "error": "unknown rx alias"}) + "\n").encode("utf-8")
+                    writer.write(http_response("400 Bad Request", "application/json", body))
+                    return
+                if rx in cfg.rx_skipped_aliases:
+                    body = (json.dumps({"ok": False, "error": "rx is skipped"}) + "\n").encode("utf-8")
+                    writer.write(http_response("400 Bad Request", "application/json", body))
+                    return
+                if tx.upper() != "NULL" and tx in cfg.tx_skipped_aliases:
+                    body = (json.dumps({"ok": False, "error": "tx is skipped"}) + "\n").encode("utf-8")
+                    writer.write(http_response("400 Bad Request", "application/json", body))
+                    return
+                outcome = await process_matrix_set_line(
+                    cfg,
+                    amx,
+                    state,
+                    cmd_line,
+                    rt["amx_verify_timeout_ms"],
+                    runtime,
+                    notifier,
+                )
+                failed_rx = {f[0] for f in outcome.failures}
+                http_ok = (
+                    outcome.rti_ok
+                    and not outcome.exception_occurred
+                    and rx not in failed_rx
+                    and outcome.rti_response != "unknown command"
+                )
+                if not http_ok:
+                    err = "matrix set failed"
+                    if outcome.exception_occurred:
+                        err = "matrix routing failed"
+                    elif outcome.rti_response == "unknown command":
+                        err = "invalid matrix command"
+                    elif rx in failed_rx:
+                        err = "AMX route failed for this decoder"
+                    status = "500 Internal Server Error" if outcome.exception_occurred else "400 Bad Request"
+                    body = (json.dumps({"ok": False, "error": err}) + "\n").encode("utf-8")
+                    writer.write(http_response(status, "application/json", body))
+                    LOG.warning(
+                        "HTTP control [source=%s]: matrix_set failed rx=%r tx=%r",
+                        ctl_via,
+                        rx,
+                        tx,
+                    )
+                    return
+                video_tx = state.video.get(rx)
+                body = (json.dumps({"ok": True, "rx": rx, "video_tx": video_tx}) + "\n").encode("utf-8")
+                writer.write(http_response("200 OK", "application/json", body))
+                LOG.info("HTTP control [source=%s]: matrix_set rx=%r tx=%r", ctl_via, rx, tx)
+                return
+
             if path.startswith("/control/restart"):
                 if params_want_html(params):
                     writer.write(
@@ -720,6 +791,59 @@ async def handle_http_client(
                     f"<tr><td><code>{rx_alias}</code></td><td><code>{tx_alias}</code></td><td class=\"{status_cls}\"><b>{status_txt}</b></td><td class=\"{hdmi_cls}\"><b>{hdmi_txt}</b></td><td>{rx_skip_btn}</td></tr>"
                 )
             route_html = "\n".join(route_rows)
+
+            mtx_cols = sorted(cfg.tx_by_alias.keys(), key=tx_alias_sort_key)
+            mrx_rows = sorted(cfg.rx_by_alias.keys(), key=rx_alias_sort_key)
+            matrix_rows_parts: List[str] = []
+            if mrx_rows:
+                th_tx = "".join(
+                    f'<th scope="col" title="{html.escape(tx)}">{html.escape(tx)}</th>' for tx in mtx_cols
+                )
+                th_all = '<th scope="col" title="No input (NULL)">None</th>'
+                for rx in mrx_rows:
+                    rx_skip = rx in cfg.rx_skipped_aliases
+                    cur = state.video.get(rx)
+                    tds: List[str] = [f'<th scope="row"><code>{html.escape(rx)}</code></th>']
+                    for tx in mtx_cols:
+                        tx_skip = tx in cfg.tx_skipped_aliases
+                        disabled = rx_skip or tx_skip
+                        is_on = not disabled and cur == tx
+                        btn_cls = "dt-matrix-cell"
+                        if is_on:
+                            btn_cls += " dt-matrix-on"
+                        if disabled:
+                            btn_cls += " dt-matrix-skip"
+                        dis = " disabled" if disabled else ""
+                        tds.append(
+                            f'<td><button type="button" class="{btn_cls}" data-matrix-rx="{html.escape(rx)}" '
+                            f'data-matrix-tx="{html.escape(tx)}"{dis} '
+                            f'aria-label="Route {html.escape(rx)} to {html.escape(tx)}"></button></td>'
+                        )
+                    disabled_n = rx_skip
+                    is_on_n = not disabled_n and cur is None
+                    btn_cls = "dt-matrix-cell"
+                    if is_on_n:
+                        btn_cls += " dt-matrix-on"
+                    if disabled_n:
+                        btn_cls += " dt-matrix-skip"
+                    dis = " disabled" if disabled_n else ""
+                    tds.append(
+                        f'<td><button type="button" class="{btn_cls}" data-matrix-rx="{html.escape(rx)}" '
+                        f'data-matrix-tx="NULL"{dis} aria-label="Clear input for {html.escape(rx)}"></button></td>'
+                    )
+                    matrix_rows_parts.append("<tr>" + "".join(tds) + "</tr>")
+                matrix_table_html = (
+                    '<div class="table-wrap dt-matrix-wrap"><table class="dt-matrix-table" role="grid">'
+                    "<thead><tr><th scope=\"col\">RX</th>"
+                    + th_tx
+                    + th_all
+                    + "</tr></thead><tbody>"
+                    + "\n".join(matrix_rows_parts)
+                    + "</tbody></table></div>"
+                )
+            else:
+                matrix_table_html = '<p class="subtle">No RX endpoints configured.</p>'
+
             _ct = cfg.http_status_control_token or ""
             ctl_qs = ("&token=" + urllib.parse.quote_plus(_ct)) if _ct else ""
             _ui_sess = http_ui_sess_issue()
@@ -1156,6 +1280,24 @@ async def handle_http_client(
       border-color: var(--border);
       text-decoration: none;
     }}
+    .dt-matrix-wrap {{ overflow: auto; max-width: 100%; margin: 0 -4px; }}
+    .dt-matrix-table {{ border-collapse: collapse; font-size: 0.82rem; width: max-content; min-width: 100%; }}
+    .dt-matrix-table th, .dt-matrix-table td {{
+      border: 1px solid var(--border); padding: 4px 6px; text-align: center; vertical-align: middle;
+    }}
+    .dt-matrix-table th[scope="row"] {{ text-align: left; white-space: nowrap; }}
+    .dt-matrix-cell {{
+      width: 44px; height: 36px; min-width: 44px; padding: 0; box-sizing: border-box;
+      border: 1px solid var(--border); border-radius: 6px; background: var(--row); cursor: pointer;
+    }}
+    .dt-matrix-cell.dt-matrix-on {{
+      background: #16a34a; border-color: #15803d; cursor: default;
+    }}
+    [data-theme="dark"] .dt-matrix-cell.dt-matrix-on {{
+      background: #15803d; border-color: #166534;
+    }}
+    .dt-matrix-cell.dt-matrix-skip {{ opacity: 0.4; cursor: not-allowed; }}
+    .dt-matrix-cell.dt-matrix-busy {{ opacity: 0.55; pointer-events: none; }}
     .dt-page[hidden] {{ display: none !important; }}
     .dt-page > .section-title:first-child {{ margin-top: 0; }}
   </style>
@@ -1296,9 +1438,9 @@ async def handle_http_client(
 
   <section id="page-matrix" class="dt-page"{_page_hidden('matrix')}>
   <div class="section-title">Matrix</div>
-  <p class="subtle">Interactive drag-and-drop matrix — not implemented yet.</p>
+  <p class="subtle">Click a cell to assign that RX to a TX (same as <code>matrix set …</code> on the RTI port). Skipped endpoints are disabled.</p>
   <div class="card">
-    <p class="subtle" style="margin:0">Placeholder: a drag-and-drop matrix view will live here.</p>
+    {matrix_table_html}
   </div>
   </section>
 
@@ -1939,6 +2081,46 @@ async def handle_http_client(
         applyTheme(next);
         localStorage.setItem(themeKey, next);
       }});
+
+      const pageMatrix = document.getElementById('page-matrix');
+      if (pageMatrix) {{
+        pageMatrix.addEventListener('click', async (e) => {{
+          const btn = e.target.closest('.dt-matrix-cell');
+          if (!btn || btn.disabled || btn.classList.contains('dt-matrix-skip')) return;
+          const rx = btn.getAttribute('data-matrix-rx');
+          const tx = btn.getAttribute('data-matrix-tx');
+          if (!rx || tx === null || tx === undefined) return;
+          const row = btn.closest('tr');
+          const cells = row ? row.querySelectorAll('.dt-matrix-cell') : [];
+          cells.forEach((el) => {{
+            if (!el.classList.contains('dt-matrix-skip')) el.disabled = true;
+            el.classList.add('dt-matrix-busy');
+          }});
+          try {{
+            const r = await fetch(ctlUrl('/control/matrix_set?tx=' + encodeURIComponent(tx) + '&rx=' + encodeURIComponent(rx)));
+            const j = await r.json().catch(() => ({{}}));
+            if (!r.ok || !j.ok) {{
+              showModal(false, 'Matrix', j.error || 'Request failed');
+              return;
+            }}
+            if (row) {{
+              const vt = j.video_tx;
+              row.querySelectorAll('.dt-matrix-cell').forEach((el) => {{
+                const t = el.getAttribute('data-matrix-tx');
+                const on = (vt === null || vt === undefined) ? (t === 'NULL') : (vt === t);
+                el.classList.toggle('dt-matrix-on', on);
+              }});
+            }}
+          }} catch (err) {{
+            showModal(false, 'Network error', String(err.message || err));
+          }} finally {{
+            cells.forEach((el) => {{
+              el.classList.remove('dt-matrix-busy');
+              if (!el.classList.contains('dt-matrix-skip')) el.disabled = false;
+            }});
+          }}
+        }});
+      }}
 
       const homeOverviewCardEl = document.getElementById('homeOverviewCard');
       const devicesBodyEl = document.getElementById('devicesBody');

@@ -179,6 +179,7 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
                 started_at=started_at,
                 config_path=config_path,
                 amx_self_test=amx_self_test,
+                notifier=notifier,
             ),
             host=cfg.http_status_bind,
             port=cfg.http_status_port,
