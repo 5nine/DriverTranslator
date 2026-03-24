@@ -625,20 +625,12 @@ async def handle_http_client(
                     status = "500 Internal Server Error" if outcome.exception_occurred else "400 Bad Request"
                     body = (json.dumps({"ok": False, "error": err}) + "\n").encode("utf-8")
                     writer.write(http_response(status, "application/json", body))
-                    LOG.warning(
-                        "HTTP control [source=%s]: matrix_set failed line=%r",
-                        ctl_via,
-                        cmd_line,
-                    )
+                    LOG.warning("HTTP -> %s", cmd_line)
                     return
                 video_tx = state.video.get(rx)
                 body = (json.dumps({"ok": True, "rx": rx, "video_tx": video_tx}) + "\n").encode("utf-8")
                 writer.write(http_response("200 OK", "application/json", body))
-                LOG.info(
-                    "HTTP control [source=%s]: matrix_set applied RTI line %r (AMX uses set:<stream> to decoders)",
-                    ctl_via,
-                    cmd_line,
-                )
+                LOG.info("HTTP -> %s", cmd_line)
                 return
 
             if path.startswith("/control/restart"):

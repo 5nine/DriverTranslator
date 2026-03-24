@@ -11,9 +11,6 @@ from .utils import retry_delay_seconds
 
 LOG = logging.getLogger("drivertranslator")
 
-# Decoder TCP uses compact commands (e.g. set:<stream>); WyreStorm RTI uses text like matrix set <TX> <RX>.
-_AMX_DECODER_LOG_SUFFIX = " (decoder TCP; not WyreStorm RTI text)"
-
 
 class AmxClient:
     def __init__(
@@ -192,7 +189,7 @@ class AmxClient:
     async def _send_and_read_status_locked(
         self, *, decoder_ip: str, cmd: bytes, timeout_ms: int
     ) -> Dict[str, str]:
-        LOG.info("AMX -> %s:%d %r%s", decoder_ip, self._decoder_port, cmd, _AMX_DECODER_LOG_SUFFIX)
+        LOG.info("AMX -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
         try:
             reader, writer = await open_connection(
                 decoder_ip,
@@ -219,7 +216,7 @@ class AmxClient:
                 await writer.wait_closed()
 
     async def _send_locked(self, *, decoder_ip: str, cmd: bytes) -> None:
-        LOG.info("AMX -> %s:%d %r%s", decoder_ip, self._decoder_port, cmd, _AMX_DECODER_LOG_SUFFIX)
+        LOG.info("AMX -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
         try:
             reader, writer = await open_connection(
                 decoder_ip,
@@ -377,7 +374,7 @@ class DryRunAmxClient:
         self._ensure_sim_state(decoder_ip)
         self._sim_stream[decoder_ip] = int(stream)
         cmd = f"set:{stream}\\r".encode("ascii")
-        LOG.info("AMX (dry-run) -> %s:%d %r%s", decoder_ip, self._decoder_port, cmd, _AMX_DECODER_LOG_SUFFIX)
+        LOG.info("AMX (dry-run) -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
 
     async def verify_stream(self, *, decoder_ip: str, expected_stream: int, timeout_ms: int) -> bool:
         if decoder_ip in self._offline:
@@ -408,7 +405,7 @@ class DryRunAmxClient:
         self._ensure_sim_state(decoder_ip)
         self._sim_hdmi_enabled[decoder_ip] = bool(enabled)
         cmd = b"hdmiOn\r" if enabled else b"hdmiOff\r"
-        LOG.info("AMX (dry-run) -> %s:%d %r%s", decoder_ip, self._decoder_port, cmd, _AMX_DECODER_LOG_SUFFIX)
+        LOG.info("AMX (dry-run) -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
 
     async def send_command(self, *, decoder_ip: str, command: str) -> None:
         if decoder_ip in self._offline:
@@ -426,7 +423,7 @@ class DryRunAmxClient:
         elif c == "hdmion":
             self._sim_hdmi_enabled[decoder_ip] = True
         payload = (command if command.endswith("\r") else (command + "\r")).encode("ascii")
-        LOG.info("AMX (dry-run) -> %s:%d %r%s", decoder_ip, self._decoder_port, payload, _AMX_DECODER_LOG_SUFFIX)
+        LOG.info("AMX (dry-run) -> %s:%d %r", decoder_ip, self._decoder_port, payload)
 
     async def send_command_and_get_hdmi_output(
         self, *, decoder_ip: str, command: str, timeout_ms: int
@@ -684,7 +681,7 @@ class DecoderWorker:
             await self._ensure_connected()
             assert self._writer is not None
             assert self._reader is not None
-            LOG.info("AMX -> %s:%d %r%s", self._decoder_ip, self._decoder_port, payload, _AMX_DECODER_LOG_SUFFIX)
+            LOG.info("AMX -> %s:%d %r", self._decoder_ip, self._decoder_port, payload)
             self._writer.write(payload)
             await self._writer.drain()
             try:
