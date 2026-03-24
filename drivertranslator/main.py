@@ -8,18 +8,47 @@ import html
 import ipaddress
 import json
 import logging
-import random
-import re
 import secrets
 import socket
 import subprocess
 import threading
 import time
 import urllib.parse
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from .models import (
+    Config,
+    ControllerState,
+    HealthState,
+    NhdCtlSession,
+    ProblemState,
+    RuntimeSettings,
+    Rx,
+    Tx,
+)
+from .protocol_helpers import (
+    all_endpoint_aliases as _all_endpoint_aliases,
+    as_success as _as_success,
+    device_status_rx_dict as _device_status_rx_dict,
+    device_status_tx_dict as _device_status_tx_dict,
+    format_matrix_info as _format_matrix_info,
+    format_tx_signal as _format_tx_signal,
+    lookup_rx as _lookup_rx,
+    lookup_tx as _lookup_tx,
+    tx_alias_from_amx_stream as _tx_alias_from_amx_stream,
+)
+from .utils import (
+    as_bool as _as_bool,
+    as_int as _as_int,
+    bind_addr as _bind_addr,
+    clamp_int as _clamp_int,
+    opt_str as _opt_str,
+    retry_delay_seconds as _retry_delay_seconds,
+    rx_alias_sort_key as _rx_alias_sort_key,
+    tx_alias_sort_key as _tx_alias_sort_key,
+)
+from .config_loader import load_config, validate_config as _validate_config
 
 # Quick index (major sections in this file):
 # - Unknown-command tracking/persistence
@@ -395,299 +424,6 @@ async def _open_connection(
 
 def _crlf(line: str) -> bytes:
     return (line + "\r\n").encode("utf-8", errors="replace")
-
-
-def _as_int(v: Any, *, default: int) -> int:
-    try:
-        return int(v)
-    except Exception:
-        return default
-
-
-def _bind_addr(v: Any) -> Optional[str]:
-    if v is None:
-        return None
-    s = str(v).strip()
-    return s or None
-
-
-def _opt_str(v: Any) -> Optional[str]:
-    if v is None:
-        return None
-    s = str(v).strip()
-    return s or None
-
-
-def _as_bool(v: Any, *, default: bool) -> bool:
-    if v is None:
-        return default
-    if isinstance(v, bool):
-        return v
-    s = str(v).strip().lower()
-    if s in ("1", "true", "yes", "y", "on"):
-        return True
-    if s in ("0", "false", "no", "n", "off"):
-        return False
-    return default
-
-
-def _clamp_int(v: Any, *, default: int, min_v: int, max_v: int) -> int:
-    try:
-        x = int(v)
-    except Exception:
-        x = default
-    return max(min_v, min(max_v, x))
-
-
-@dataclass(frozen=True)
-class Tx:
-    alias: str
-    hostname: str
-    ip: Optional[str]
-    amx_stream: int
-
-
-@dataclass(frozen=True)
-class Rx:
-    alias: str
-    hostname: str
-    ip: Optional[str]
-    amx_decoder_ip: str
-
-
-@dataclass(frozen=True)
-class NhdCtlIdentity:
-    api: str
-    web: str
-    core: str
-    ipsetting: Dict[str, str]
-    ipsetting2: Dict[str, str]
-
-
-@dataclass
-class Config:
-    nhd: NhdCtlIdentity
-    tx_by_alias: Dict[str, Tx]
-    tx_by_hostname: Dict[str, Tx]
-    rx_by_alias: Dict[str, Rx]
-    rx_by_hostname: Dict[str, Rx]
-    tx_skipped_aliases: Set[str]
-    rx_skipped_aliases: Set[str]
-    amx_decoder_port: int
-    amx_connect_timeout_ms: int
-    amx_command_timeout_ms: int
-    expanded_log: bool
-    amx_dry_run: bool
-    amx_persistent: bool
-    amx_keepalive_seconds: int
-    amx_bind_address: Optional[str]
-    amx_dry_run_offline_decoders: List[str]
-    amx_verify_after_set: bool
-    amx_verify_timeout_ms: int
-    amx_set_queue_limit: int
-    amx_self_test_on_start: bool
-    amx_set_retry_attempts: int
-    amx_set_retry_backoff_initial_ms: int
-    amx_set_retry_backoff_max_ms: int
-    http_status_enabled: bool
-    http_status_bind: str
-    http_status_port: int
-    http_status_log_lines: int
-    http_status_control_token: Optional[str]
-    http_status_password: str
-    rti_control_enabled: bool
-    rti_control_bind_address: Optional[str]
-    rti_control_port: int
-    rti_control_reboot_command: str
-    unknown_ctl_enabled: bool
-    unknown_ctl_persist_path: Optional[str]
-
-
-# ---------------------------------------------------------------------------
-# Config loading and validation
-# ---------------------------------------------------------------------------
-def load_config(path: str) -> Config:
-    raw = json.loads(Path(path).read_text(encoding="utf-8"))
-
-    nhd_raw = raw.get("nhd_ctl", {})
-    ver = nhd_raw.get("version", {})
-    ip1 = nhd_raw.get("ipsetting", {})
-    ip2 = nhd_raw.get("ipsetting2", {})
-
-    nhd = NhdCtlIdentity(
-        api=str(ver.get("api", "1.21")),
-        web=str(ver.get("web", "8.3.1")),
-        core=str(ver.get("core", "8.3.8")),
-        ipsetting={
-            "ip4addr": str(ip1.get("ip4addr", "169.254.1.1")),
-            "netmask": str(ip1.get("netmask", "255.255.0.0")),
-            "gateway": str(ip1.get("gateway", "169.254.1.254")),
-        },
-        ipsetting2={
-            "ip4addr": str(ip2.get("ip4addr", "192.168.11.243")),
-            "netmask": str(ip2.get("netmask", "255.255.255.0")),
-            "gateway": str(ip2.get("gateway", "192.168.11.1")),
-        },
-    )
-
-    endpoints = raw.get("endpoints", {})
-    tx_list = endpoints.get("tx", [])
-    rx_list = endpoints.get("rx", [])
-
-    txs: List[Tx] = []
-    tx_skipped_aliases: Set[str] = set()
-    for t in tx_list:
-        alias = str(t["alias"])
-        if _as_bool(t.get("skip"), default=False):
-            tx_skipped_aliases.add(alias)
-        hostname = str(t.get("hostname") or f"NHD-TX-{alias}")
-        ip = t.get("ip")
-        ip_s = str(ip) if ip is not None else None
-        amx_stream = _as_int(t.get("amx_stream"), default=0)
-        txs.append(Tx(alias=alias, hostname=hostname, ip=ip_s, amx_stream=amx_stream))
-
-    rxs: List[Rx] = []
-    rx_skipped_aliases: Set[str] = set()
-    for r in rx_list:
-        alias = str(r["alias"])
-        if _as_bool(r.get("skip"), default=False):
-            rx_skipped_aliases.add(alias)
-        hostname = str(r.get("hostname") or f"NHD-RX-{alias}")
-        ip = r.get("ip")
-        ip_s = str(ip) if ip is not None else None
-        ip = str(r["amx_decoder_ip"])
-        rxs.append(Rx(alias=alias, hostname=hostname, ip=ip_s, amx_decoder_ip=ip))
-
-    amx = raw.get("amx", {})
-    server = raw.get("server", {})
-    http_status = raw.get("http_status", {})
-    rti_control = raw.get("rti_control", {})
-    unknown_ctl = raw.get("unknown_ctl") if isinstance(raw.get("unknown_ctl"), dict) else {}
-    uc_pp = unknown_ctl.get("persist_path")
-    uc_path_s = str(uc_pp).strip() if uc_pp is not None and str(uc_pp).strip() else None
-
-    tx_by_alias = {t.alias: t for t in txs}
-    tx_by_hostname = {t.hostname: t for t in txs}
-    rx_by_alias = {r.alias: r for r in rxs}
-    rx_by_hostname = {r.hostname: r for r in rxs}
-
-    offline_decoders: List[str] = []
-    od = amx.get("dry_run_offline_decoders", [])
-    if isinstance(od, str):
-        offline_decoders = [x.strip() for x in od.split(",") if x.strip()]
-    elif isinstance(od, list):
-        offline_decoders = [str(x).strip() for x in od if str(x).strip()]
-
-    return Config(
-        nhd=nhd,
-        tx_by_alias=tx_by_alias,
-        tx_by_hostname=tx_by_hostname,
-        rx_by_alias=rx_by_alias,
-        rx_by_hostname=rx_by_hostname,
-        tx_skipped_aliases=tx_skipped_aliases,
-        rx_skipped_aliases=rx_skipped_aliases,
-        amx_decoder_port=_as_int(amx.get("decoder_port"), default=50002),
-        amx_connect_timeout_ms=_as_int(amx.get("connect_timeout_ms"), default=1000),
-        amx_command_timeout_ms=_as_int(amx.get("command_timeout_ms"), default=1500),
-        expanded_log=_as_bool(server.get("expanded_log"), default=False),
-        amx_dry_run=bool(amx.get("dry_run", False)),
-        amx_persistent=bool(amx.get("persistent", False)),
-        amx_keepalive_seconds=_as_int(amx.get("keepalive_seconds"), default=30),
-        amx_bind_address=_bind_addr(amx.get("bind_address")),  # AVoIP NIC for outbound AMX
-        amx_dry_run_offline_decoders=offline_decoders,
-        amx_verify_after_set=_as_bool(amx.get("verify_after_set"), default=True),
-        amx_verify_timeout_ms=_clamp_int(amx.get("verify_timeout_ms"), default=800, min_v=100, max_v=5000),
-        amx_set_queue_limit=_clamp_int(amx.get("set_queue_limit"), default=1, min_v=1, max_v=20),
-        amx_self_test_on_start=_as_bool(amx.get("self_test_on_start"), default=True),
-        amx_set_retry_attempts=_clamp_int(amx.get("set_retry_attempts"), default=3, min_v=1, max_v=10),
-        amx_set_retry_backoff_initial_ms=_clamp_int(amx.get("set_retry_backoff_initial_ms"), default=200, min_v=0, max_v=5000),
-        amx_set_retry_backoff_max_ms=_clamp_int(amx.get("set_retry_backoff_max_ms"), default=1200, min_v=0, max_v=10000),
-        http_status_enabled=_as_bool(http_status.get("enabled"), default=True),
-        http_status_bind=str(http_status.get("bind", "0.0.0.0")).strip() or "0.0.0.0",
-        http_status_port=_as_int(http_status.get("port"), default=8080),
-        http_status_log_lines=_as_int(http_status.get("log_lines"), default=200),
-        http_status_control_token=_opt_str(http_status.get("control_token")),
-        http_status_password=str(http_status.get("password", "1234")),
-        rti_control_enabled=_as_bool(rti_control.get("enabled"), default=False),
-        rti_control_bind_address=_bind_addr(rti_control.get("bind_address")),
-        rti_control_port=_as_int(rti_control.get("port"), default=0),
-        rti_control_reboot_command=str(rti_control.get("reboot_command", "reboot")).strip() or "reboot",
-        unknown_ctl_enabled=_as_bool(unknown_ctl.get("enabled"), default=True),
-        unknown_ctl_persist_path=uc_path_s,
-    )
-
-
-def _retry_delay_seconds(*, attempt_index: int, initial_ms: int, max_ms: int) -> float:
-    """
-    attempt_index: 1..N (1 is first retry delay)
-    Exponential backoff with small jitter.
-    """
-    if initial_ms <= 0 or max_ms <= 0:
-        return 0.0
-    base_ms = min(max_ms, int(initial_ms * (2 ** max(0, attempt_index - 1))))
-    jitter_ms = int(base_ms * random.uniform(0.0, 0.2))
-    return (base_ms + jitter_ms) / 1000.0
-
-
-_RX_ALIAS_RE = re.compile(r"^OUT(\d+)\b", re.IGNORECASE)
-_TX_ALIAS_RE = re.compile(r"^IN(\d+)\b", re.IGNORECASE)
-
-
-def _rx_alias_sort_key(alias: str) -> Tuple[int, str]:
-    """
-    Natural sort for RX aliases like OUT1-TV1, OUT10-TV10, ...
-    """
-    m = _RX_ALIAS_RE.match(alias.strip())
-    if not m:
-        return (10**9, alias)
-    try:
-        return (int(m.group(1)), alias)
-    except Exception:
-        return (10**9, alias)
-
-
-def _tx_alias_sort_key(alias: str) -> Tuple[int, str]:
-    """
-    Natural sort for TX aliases like IN1-BOX1, IN10-BOX10, ...
-    """
-    m = _TX_ALIAS_RE.match(alias.strip())
-    if not m:
-        return (10**9, alias)
-    try:
-        return (int(m.group(1)), alias)
-    except Exception:
-        return (10**9, alias)
-
-
-def _validate_config(cfg: Config) -> None:
-    errors: List[str] = []
-
-    if not cfg.tx_by_alias:
-        errors.append("No TX endpoints configured.")
-    if not cfg.rx_by_alias:
-        errors.append("No RX endpoints configured.")
-
-    # Aliases and streams
-    for tx in cfg.tx_by_alias.values():
-        if not tx.alias.upper().startswith("IN"):
-            errors.append(f"TX alias does not start with IN: {tx.alias}")
-        if tx.amx_stream <= 0:
-            errors.append(f"TX has invalid amx_stream (must be > 0): {tx.alias} -> {tx.amx_stream}")
-
-    for rx in cfg.rx_by_alias.values():
-        if not rx.alias.upper().startswith("OUT"):
-            errors.append(f"RX alias does not start with OUT: {rx.alias}")
-        if not rx.amx_decoder_ip:
-            errors.append(f"RX missing amx_decoder_ip: {rx.alias}")
-
-    if cfg.amx_dry_run and cfg.amx_persistent:
-        errors.append("Config invalid: amx.dry_run=true and amx.persistent=true cannot both be enabled.")
-
-    if cfg.http_status_port <= 0 or cfg.http_status_port > 65535:
-        errors.append(f"Invalid http_status.port: {cfg.http_status_port}")
-
-    if errors:
-        raise ValueError("Config validation failed:\n- " + "\n- ".join(errors))
 
 
 class LocalProblemReporter:
@@ -3296,154 +3032,6 @@ class _DecoderWorker:
         self.is_connected = False
 
 
-class NhdCtlSession:
-    def __init__(self) -> None:
-        self.alias_mode: bool = True  # default per doc: on
-
-
-# ---------------------------------------------------------------------------
-# Emulated controller/shared runtime state
-# ---------------------------------------------------------------------------
-class ControllerState:
-    """
-    Shared state across sessions to emulate the controller.
-
-    RTI drivers commonly rely on matrix query commands to populate feedback variables.
-    """
-
-    def __init__(self, cfg: Config) -> None:
-        # NULL means "no assignment"
-        self.video: Dict[str, Optional[str]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
-        self.audio: Dict[str, Optional[str]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
-        self.usb: Dict[str, Optional[str]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
-        self.serial: Dict[str, Optional[str]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
-        self.infrared: Dict[str, Optional[str]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
-        # Best-effort health status (updated on AMX send success/failure).
-        self.rx_online: Dict[str, bool] = {rx.alias: True for rx in cfg.rx_by_alias.values()}
-        # Best-effort HDMI output state from AMX status (True=on, False=off, None=unknown).
-        self.rx_hdmi_output: Dict[str, Optional[bool]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
-        # TX status is refreshed in background every 30 seconds.
-        self.tx_online: Dict[str, bool] = {tx.alias: True for tx in cfg.tx_by_alias.values()}
-        self.tx_status_fields: Dict[str, Dict[str, str]] = {tx.alias: {} for tx in cfg.tx_by_alias.values()}
-
-    def set_rx_online(self, rx_alias: str, online: bool) -> None:
-        if rx_alias in self.rx_online:
-            self.rx_online[rx_alias] = bool(online)
-
-    def set_rx_hdmi_output(self, rx_alias: str, enabled: Optional[bool]) -> None:
-        if rx_alias in self.rx_hdmi_output:
-            self.rx_hdmi_output[rx_alias] = enabled
-
-    def set_tx_online(self, tx_alias: str, online: bool) -> None:
-        if tx_alias in self.tx_online:
-            self.tx_online[tx_alias] = bool(online)
-
-    def set_tx_status_fields(self, tx_alias: str, fields: Dict[str, str]) -> None:
-        if tx_alias in self.tx_status_fields:
-            self.tx_status_fields[tx_alias] = dict(fields)
-
-    def set_all_media(self, *, tx_alias: Optional[str], rx_aliases: List[str]) -> None:
-        for rx in rx_aliases:
-            self.video[rx] = tx_alias
-            self.audio[rx] = tx_alias
-            self.usb[rx] = tx_alias
-            self.serial[rx] = tx_alias
-            self.infrared[rx] = tx_alias
-
-    def set_rx_all_media(self, *, rx_alias: str, tx_alias: Optional[str]) -> None:
-        if rx_alias not in self.video:
-            return
-        self.video[rx_alias] = tx_alias
-        self.audio[rx_alias] = tx_alias
-        self.usb[rx_alias] = tx_alias
-        self.serial[rx_alias] = tx_alias
-        self.infrared[rx_alias] = tx_alias
-
-    def set_breakaway(self, *, kind: str, tx_alias: Optional[str], rx_aliases: List[str]) -> None:
-        table = {
-            "video": self.video,
-            "audio": self.audio,
-            "audio2": self.audio,  # treat as same for emulation purposes
-            "usb": self.usb,
-            "serial": self.serial,
-            "infrared": self.infrared,
-        }.get(kind)
-        if table is None:
-            return
-        for rx in rx_aliases:
-            table[rx] = tx_alias
-
-
-class HealthState:
-    def __init__(self) -> None:
-        self.rti_clients: int = 0
-
-
-class ProblemState:
-    def __init__(self, *, max_lines: int = 50) -> None:
-        self._max = max(1, int(max_lines))
-        self._items: collections.deque[Dict[str, Any]] = collections.deque(maxlen=self._max)
-        self._lock = asyncio.Lock()
-
-    async def record(self, *, key: str, message: str) -> None:
-        async with self._lock:
-            self._items.append(
-                {"ts": int(time.time()), "key": key, "message": message.strip()}
-            )
-
-    async def snapshot(self) -> List[Dict[str, Any]]:
-        async with self._lock:
-            return list(self._items)
-
-
-class RuntimeSettings:
-    def __init__(self, cfg: Config) -> None:
-        self._lock = asyncio.Lock()
-        self.amx_dry_run: bool = cfg.amx_dry_run
-        self.amx_persistent: bool = cfg.amx_persistent
-        self.amx_verify_after_set: bool = cfg.amx_verify_after_set
-        self.amx_verify_timeout_ms: int = cfg.amx_verify_timeout_ms
-        self.amx_self_test_on_start: bool = cfg.amx_self_test_on_start
-        self.expanded_log: bool = cfg.expanded_log
-        self.http_log_lines: int = cfg.http_status_log_lines
-
-    async def snapshot(self) -> Dict[str, Any]:
-        async with self._lock:
-            return {
-                "amx_dry_run": self.amx_dry_run,
-                "amx_persistent": self.amx_persistent,
-                "amx_verify_after_set": self.amx_verify_after_set,
-                "amx_verify_timeout_ms": self.amx_verify_timeout_ms,
-                "amx_self_test_on_start": self.amx_self_test_on_start,
-                "expanded_log": self.expanded_log,
-                "http_log_lines": self.http_log_lines,
-            }
-
-    async def set_bool(self, key: str, value: bool) -> None:
-        async with self._lock:
-            if key == "amx_dry_run":
-                self.amx_dry_run = value
-            elif key == "amx_persistent":
-                self.amx_persistent = value
-            elif key == "amx_verify_after_set":
-                self.amx_verify_after_set = value
-            elif key == "amx_self_test_on_start":
-                self.amx_self_test_on_start = value
-            elif key == "expanded_log":
-                self.expanded_log = value
-            else:
-                raise KeyError(key)
-
-    async def set_int(self, key: str, value: int) -> None:
-        async with self._lock:
-            if key == "amx_verify_timeout_ms":
-                self.amx_verify_timeout_ms = _clamp_int(value, default=800, min_v=100, max_v=5000)
-            elif key == "http_log_lines":
-                self.http_log_lines = _clamp_int(value, default=200, min_v=0, max_v=500)
-            else:
-                raise KeyError(key)
-
-
 class _RtiControlUdp(asyncio.DatagramProtocol):
     def __init__(self, *, cfg: Config):
         self._cfg = cfg
@@ -3471,121 +3059,6 @@ class _RtiControlUdp(asyncio.DatagramProtocol):
 # ---------------------------------------------------------------------------
 # RTI/NHD-CTL protocol helpers and command surface
 # ---------------------------------------------------------------------------
-def _lookup_tx(cfg: Config, token: str) -> Optional[Tx]:
-    return cfg.tx_by_alias.get(token) or cfg.tx_by_hostname.get(token)
-
-
-def _lookup_rx(cfg: Config, token: str) -> Optional[Rx]:
-    return cfg.rx_by_alias.get(token) or cfg.rx_by_hostname.get(token)
-
-
-def _tx_alias_from_amx_stream(cfg: Config, stream_value: Optional[str]) -> Optional[str]:
-    s = (stream_value or "").strip()
-    if not s:
-        return None
-    for tx in cfg.tx_by_alias.values():
-        if str(tx.amx_stream) == s:
-            return tx.alias
-    return None
-
-
-def _all_endpoint_aliases(cfg: Config) -> List[str]:
-    return list(cfg.tx_by_alias.keys()) + list(cfg.rx_by_alias.keys())
-
-
-def _emulated_multicast_ips(*, stream_id: int) -> Tuple[str, str]:
-    """Stable fake multicast addresses for TX status (100/200-series style API)."""
-    s = max(0, int(stream_id))
-    v = 16 + (s % 200)
-    a = 40 + (s * 7 % 200)
-    return (f"224.{v}.{a}.{200 + (s % 55)}", f"224.{v + 32}.{a}.{200 + (s % 55)}")
-
-
-def _device_status_tx_dict(tx: Tx) -> Dict[str, str]:
-    vid, aud = _emulated_multicast_ips(stream_id=tx.amx_stream)
-    return {
-        "aliasname": tx.alias,
-        "audio stream ip address": aud,
-        "encoding enable": "true",
-        "hdmi in active": "true",
-        "hdmi in frame rate": "60",
-        "line out audio enable": "false",
-        "name": tx.hostname,
-        "resolution": "1920x1080",
-        "stream frame rate": "60",
-        "stream resolution": "1920x1080",
-        "video stream ip address": vid,
-    }
-
-
-def _format_tx_signal(fields: Dict[str, str]) -> Tuple[str, str]:
-    hdmi_in = (fields.get("HDMIINPUT") or "").strip().lower()
-    input_res = (fields.get("INPUTRES") or "").strip()
-    if hdmi_in == "connected":
-        if input_res:
-            return (f"HDMI IN: {input_res}", "ok")
-        return ("HDMI IN: CONNECTED", "ok")
-    if hdmi_in == "disconnected":
-        return ("HDMI IN: DISCONNECTED", "bad")
-    if input_res:
-        return (f"IN RES: {input_res}", "")
-    return ("UNKNOWN", "")
-
-
-def _device_status_rx_dict(rx: Rx, state: ControllerState) -> Dict[str, str]:
-    online = bool(state.rx_online.get(rx.alias, True))
-    hdmi_enabled = state.rx_hdmi_output.get(rx.alias)
-    routed_tx = state.video.get(rx.alias)
-    hdmi_out_active = "true" if hdmi_enabled is not False else "false"
-    if online and routed_tx:
-        return {
-            "aliasname": rx.alias,
-            "audio bitrate": "3072000",
-            "audio input format": "lpcm",
-            "hdcp status": "hdcp22",
-            "hdmi out active": hdmi_out_active,
-            "hdmi out audio enable": "true",
-            "hdmi out frame rate": "60",
-            "hdmi out resolution": "1920x1080",
-            "line out audio enable": "true",
-            "name": rx.hostname,
-            "stream error count": "0",
-            "stream frame rate": "60",
-            "stream resolution": "1920x1080",
-        }
-    if online:
-        return {
-            "aliasname": rx.alias,
-            "audio bitrate": "0",
-            "audio input format": "lpcm",
-            "hdcp status": "none",
-            "hdmi out active": hdmi_out_active,
-            "hdmi out audio enable": "false",
-            "hdmi out frame rate": "0",
-            "hdmi out resolution": "unknown",
-            "line out audio enable": "false",
-            "name": rx.hostname,
-            "stream error count": "0",
-            "stream frame rate": "0",
-            "stream resolution": "unknown",
-        }
-    return {
-        "aliasname": rx.alias,
-        "audio bitrate": "0",
-        "audio input format": "unknown",
-        "hdcp status": "none",
-        "hdmi out active": "false",
-        "hdmi out audio enable": "false",
-        "hdmi out frame rate": "0",
-        "hdmi out resolution": "unknown",
-        "line out audio enable": "false",
-        "name": rx.hostname,
-        "stream error count": "65535",
-        "stream frame rate": "0",
-        "stream resolution": "unknown",
-    }
-
-
 def _handle_config_get(cfg: Config, session: NhdCtlSession, state: ControllerState, cmd: str) -> List[str]:
     parts = cmd.split()
     if parts[:3] == ["config", "get", "version"]:
@@ -4096,27 +3569,6 @@ async def _apply_amx_command_to_rx_aliases(
             else:
                 state.set_rx_online(a, True)
     return failures, status_by_rx
-
-
-def _format_matrix_info(
-    *,
-    heading: str,
-    mapping: Dict[str, Optional[str]],
-    rx_aliases: List[str],
-) -> List[str]:
-    lines: List[str] = [f"{heading} information:"]
-    for rx in rx_aliases:
-        tx = mapping.get(rx)
-        lines.append(f"{(tx if tx is not None else 'NULL')} {rx}")
-    return lines
-
-
-def _as_success(line: str) -> str:
-    # Some WyreStorm API commands explicitly append success|failure, others just mirror.
-    # Returning success for state-mutating commands keeps RTI drivers happy.
-    if line.endswith(" success") or line.endswith(" failure"):
-        return line
-    return f"{line} success"
 
 
 def _handle_multiview_get(cfg: Config, cmd: str) -> List[str]:
