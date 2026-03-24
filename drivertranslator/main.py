@@ -49,9 +49,17 @@ from .utils import (
     tx_alias_sort_key as _tx_alias_sort_key,
 )
 from .config_loader import load_config, validate_config as _validate_config
+from .unknown_ctl import (
+    clear_persisted as _unknown_ctl_clear_persisted,
+    configure as _unknown_ctl_configure,
+    load_from_disk as _unknown_ctl_load_from_disk,
+    page_text as _unknown_ctl_page_text,
+    persist_file as _unknown_ctl_persist_file,
+    record as _unknown_ctl_record,
+)
 
 # Quick index (major sections in this file):
-# - Unknown-command tracking/persistence
+# - Unknown-command tracking: unknown_ctl.py
 # - Config loading/validation
 # - RTI status reporting/notification
 # - HTTP status + control API/UI
@@ -63,103 +71,8 @@ LOG = logging.getLogger("drivertranslator")
 
 _LOG_RING: "collections.deque[str]" = collections.deque(maxlen=500)
 
-# Deduplicated RTI lines that received "unknown command" (for status page / triage).
-_UNKNOWN_CTL_MAX_KEYS = 400
-_unknown_ctl: Dict[str, Dict[str, Any]] = {}
-_unknown_ctl_lock = threading.Lock()
-_unknown_ctl_file: Optional[Path] = None
 _config_write_lock = threading.Lock()
 _TX_STATUS_POLL_INTERVAL_SECONDS = 30
-
-
-# ---------------------------------------------------------------------------
-# Unknown-command tracking and persistence
-# ---------------------------------------------------------------------------
-def _unknown_ctl_configure(*, enabled: bool, config_dir: Path, persist_path: Optional[str]) -> None:
-    global _unknown_ctl_file
-    if not enabled:
-        _unknown_ctl_file = None
-        return
-    if persist_path and str(persist_path).strip():
-        _unknown_ctl_file = Path(persist_path).expanduser().resolve()
-    else:
-        _unknown_ctl_file = (config_dir / "unknown_ctl.json").resolve()
-
-
-def _unknown_ctl_load_from_disk() -> None:
-    global _unknown_ctl
-    path = _unknown_ctl_file
-    if path is None or not path.is_file():
-        return
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        LOG.warning("unknown_ctl: could not load %s: %s", path, e)
-        return
-    entries = raw.get("entries") if isinstance(raw, dict) else None
-    if not isinstance(entries, dict):
-        return
-    loaded: Dict[str, Dict[str, Any]] = {}
-    for k, v in entries.items():
-        if not isinstance(k, str) or not isinstance(v, dict):
-            continue
-        try:
-            c = int(v.get("count", 1))
-            first = str(v.get("first", ""))
-            last = str(v.get("last", ""))
-        except (TypeError, ValueError):
-            continue
-        if c < 1 or len(k) > 2000:
-            continue
-        loaded[k] = {"count": c, "first": first or "?", "last": last or "?"}
-        if len(loaded) >= _UNKNOWN_CTL_MAX_KEYS:
-            break
-    with _unknown_ctl_lock:
-        _unknown_ctl.clear()
-        _unknown_ctl.update(loaded)
-    LOG.info("unknown_ctl: loaded %d entr%s from %s", len(loaded), "y" if len(loaded) == 1 else "ies", path)
-
-
-def _unknown_ctl_save_to_disk() -> None:
-    path = _unknown_ctl_file
-    if path is None:
-        return
-    with _unknown_ctl_lock:
-        payload = {"v": 1, "entries": dict(_unknown_ctl)}
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        tmp.replace(path)
-    except OSError as e:
-        LOG.warning("unknown_ctl: save failed %s: %s", path, e)
-
-
-def _unknown_ctl_clear_persisted() -> None:
-    with _unknown_ctl_lock:
-        _unknown_ctl.clear()
-    _unknown_ctl_save_to_disk()
-
-
-def _unknown_ctl_record(line: str) -> None:
-    key = line.strip()
-    if not key or len(key) > 2000:
-        return
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    with _unknown_ctl_lock:
-        if key in _unknown_ctl:
-            e = _unknown_ctl[key]
-            e["count"] = int(e["count"]) + 1
-            e["last"] = now
-        else:
-            if len(_unknown_ctl) >= _UNKNOWN_CTL_MAX_KEYS:
-                victim = min(
-                    _unknown_ctl.items(),
-                    key=lambda kv: (int(kv[1]["count"]), kv[1]["last"]),
-                )[0]
-                del _unknown_ctl[victim]
-            _unknown_ctl[key] = {"count": 1, "first": now, "last": now}
-    _unknown_ctl_save_to_disk()
 
 
 def _persist_runtime_setting_to_config(*, config_path: str, key: str, value: Any) -> None:
@@ -311,35 +224,6 @@ def _persist_endpoint_skip_to_config(*, config_path: str, kind: str, alias: str,
         "skip": bool(skip),
         "restart_required": True,
     }
-
-
-def _unknown_ctl_page_text() -> str:
-    with _unknown_ctl_lock:
-        items = list(_unknown_ctl.items())
-    if not items:
-        return (
-            "(No unrecognized commands yet.)\n\n"
-            "When the WyreStorm/RTI driver sends a line the emulator does not handle, "
-            "it appears here with a count."
-        )
-    items.sort(key=lambda x: (-int(x[1]["count"]), x[1]["last"]))
-    lines = [
-        "# DriverTranslator — unrecognized NHD-CTL / RTI TCP command lines",
-        "# How to read this:",
-        "#   - These are EXACT lines sent TO this service (RTI port, e.g. 2323).",
-        "#   - Server replied: unknown command",
-        "#   - COUNT = how many times that same line was sent (deduplicated).",
-        "#   - Times are UTC. Copy from the dashed line down and paste into support chat.",
-        "# ---------------------------------------------------------------------------",
-        "",
-    ]
-    for cmd, meta in items:
-        lines.append(
-            f"{int(meta['count'])}× | first: {meta['first']} | last: {meta['last']}"
-        )
-        lines.append(f"    {cmd}")
-        lines.append("")
-    return "\n".join(lines)
 
 
 def _ctl_json(v: Any) -> str:
@@ -1327,10 +1211,11 @@ async def _handle_http_client(
             _ctl_qs_js = json.dumps(ctl_qs)
             _amx_port = int(cfg.amx_decoder_port)
             _unknown_pre = html.escape(_unknown_ctl_page_text())
-            if _unknown_ctl_file is not None:
+            _uc_path = _unknown_ctl_persist_file()
+            if _uc_path is not None:
                 _uc_persist_note = (
                     "Stored on disk at <code>"
-                    + html.escape(str(_unknown_ctl_file))
+                    + html.escape(str(_uc_path))
                     + "</code> (survives restart). Use the button below the list to clear."
                 )
             else:
