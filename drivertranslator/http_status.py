@@ -960,7 +960,7 @@ async def handle_http_client(
       line-height: 1.5;
     }}
     .wrap {{
-      max-width: 820px;
+      max-width: 1024px;
       margin: 0 auto;
       padding: 28px 20px 48px;
     }}
@@ -974,7 +974,7 @@ async def handle_http_client(
       margin-bottom: 24px;
     }}
     .dt-menubar-inner {{
-      max-width: 820px;
+      max-width: 1024px;
       margin: 0 auto;
       padding: 12px 20px;
       display: flex;
