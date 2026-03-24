@@ -882,7 +882,7 @@ async def handle_http_client(
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Conductor One by Integrion</title>
+  <title>Conductor1™ by Integrion</title>
   <style>
     :root {{
       color-scheme: light dark;
@@ -1001,6 +1001,12 @@ async def handle_http_client(
       font-size: 1.42rem;
       font-weight: 700;
       letter-spacing: -0.02em;
+    }}
+    .dt-brand-tm {{
+      font-size: 0.52em;
+      font-weight: 600;
+      vertical-align: super;
+      margin-left: 0.06em;
     }}
     .dt-brand-sub {{
       font-size: 0.62rem;
@@ -1320,7 +1326,7 @@ async def handle_http_client(
 <body>
   <header class="dt-menubar">
     <div class="dt-menubar-inner">
-      <a href="/home" class="dt-menubar-brand"><span class="dt-brand-main">Conductor One</span><span class="dt-brand-sub">by Integrion</span></a>
+      <a href="/home" class="dt-menubar-brand"><span class="dt-brand-main">Conductor1<span class="dt-brand-tm" aria-label="trademark">™</span></span><span class="dt-brand-sub">by Integrion</span></a>
       <nav class="dt-nav" aria-label="Main">
         <a href="/home" class="dt-nav-link{_nav_active('home')}">Home</a>
         <a href="/controls" class="dt-nav-link{_nav_active('controls')}">Controls</a>
