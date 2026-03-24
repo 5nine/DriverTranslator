@@ -183,6 +183,23 @@ Then send this exact UDP payload:
 
 ---
 
+## `config.json` (this repo)
+
+The repo root **`config.json`** is the **committed live-test template** for the current branch. It includes a **`_drivertranslator`** object (ignored by the loader) so you can confirm you are using the right file—check **`profile`**, **`branch`**, and **`updated`**.
+
+On the appliance (install path is usually `/opt/drivertranslator`):
+
+```bash
+cd /opt/drivertranslator
+sudo git pull origin refactor/split-main-modules
+head -n 12 config.json
+sudo systemctl restart drivertranslator
+```
+
+You should see `"branch": "refactor/split-main-modules"` in the JSON. Edit **`amx.bind_address`**, **`http_status.bind`**, **`endpoints`**, and **`http_status.password`** for your site.
+
+---
+
 ## Configuration notes
 
 - **AMX switching mode**
