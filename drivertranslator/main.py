@@ -4181,6 +4181,11 @@ async def handle_client(
             LOG.info("RTI <- %s", resp_line)
         writer.write(_crlf(resp_line))
 
+    async def _end_response_block() -> None:
+        # Compatibility: some RTI flows expect a blank-line terminator per command response.
+        _write_rti_line("")
+        await writer.drain()
+
     async def _read_protocol_line() -> Optional[str]:
         """
         Read one controller command line, accepting CRLF, LF, or CR delimiters.
@@ -4304,6 +4309,7 @@ async def handle_client(
 
                 _write_rti_line(resp if ok else "unknown command")
                 await writer.drain()
+                await _end_response_block()
                 continue
 
             # Breakaway switching
@@ -4320,6 +4326,7 @@ async def handle_client(
                         if tx_token.upper() != "NULL":
                             _write_rti_line("unknown command")
                             await writer.drain()
+                            await _end_response_block()
                             continue
                     else:
                         tx_alias = tx_obj.alias
@@ -4330,6 +4337,7 @@ async def handle_client(
                         if rx_obj is None:
                             _write_rti_line("unknown command")
                             await writer.drain()
+                            await _end_response_block()
                             break
                         rx_aliases.append(rx_obj.alias)
                     else:
@@ -4389,6 +4397,7 @@ async def handle_client(
 
                         _write_rti_line(line)  # command mirror ack
                         await writer.drain()
+                        await _end_response_block()
                         continue
 
             # Matrix query commands used for RTI feedback variables
@@ -4403,6 +4412,7 @@ async def handle_client(
                             if rx_obj is None:
                                 _write_rti_line("unknown command")
                                 await writer.drain()
+                                await _end_response_block()
                                 break
                             rx_aliases_m.append(rx_obj.alias)
                         else:
@@ -4435,6 +4445,7 @@ async def handle_client(
                             if rx_obj is None:
                                 _write_rti_line("unknown command")
                                 await writer.drain()
+                                await _end_response_block()
                                 break
                             rx_aliases.append(rx_obj.alias)
                         else:
@@ -4454,6 +4465,7 @@ async def handle_client(
                     if table is None:
                         _write_rti_line("unknown command")
                         await writer.drain()
+                        await _end_response_block()
                         continue
 
                     for resp_line in _format_matrix_info(
@@ -4477,6 +4489,7 @@ async def handle_client(
                     _unknown_ctl_record(line)
                     _write_rti_line("unknown command")
                 await writer.drain()
+                await _end_response_block()
                 continue
 
             if (
@@ -4496,6 +4509,7 @@ async def handle_client(
                     _unknown_ctl_record(line)
                     _write_rti_line("unknown command")
                     await writer.drain()
+                    await _end_response_block()
                     continue
 
                 rx_aliases: List[str] = []
@@ -4504,6 +4518,7 @@ async def handle_client(
                     if rx_obj is None:
                         _write_rti_line("unknown command")
                         await writer.drain()
+                        await _end_response_block()
                         break
                     rx_aliases.append(rx_obj.alias)
                 else:
@@ -4543,12 +4558,14 @@ async def handle_client(
                         )
                     _write_rti_line(line)
                     await writer.drain()
+                    await _end_response_block()
                     continue
 
             if lower.startswith("config set "):
                 # For many config set commands, WyreStorm replies with command mirror.
                 _write_rti_line(line)
                 await writer.drain()
+                await _end_response_block()
                 continue
 
             if lower.startswith("config get "):
@@ -4564,6 +4581,8 @@ async def handle_client(
                     await writer.drain()
                     _write_rti_line("")
                 await writer.drain()
+                if len(_cg_out) <= 1:
+                    await _end_response_block()
                 continue
 
             # Safe mirrors / minimal responses for RTI driver feature surface.
@@ -4575,6 +4594,7 @@ async def handle_client(
                 for resp_line in _vw_out:
                     _write_rti_line(resp_line)
                 await writer.drain()
+                await _end_response_block()
                 continue
 
             if lower.startswith(("mscene get", "mview get")):
@@ -4584,6 +4604,7 @@ async def handle_client(
                 for resp_line in _mv_out:
                     _write_rti_line(resp_line)
                 await writer.drain()
+                await _end_response_block()
                 continue
 
             # Scene/multiview activation and edits: acknowledge success.
@@ -4609,12 +4630,14 @@ async def handle_client(
                 else:
                     _write_rti_line(line)
                 await writer.drain()
+                await _end_response_block()
                 continue
 
             # Unknown command (no handler matched)
             _unknown_ctl_record(line)
             _write_rti_line("unknown command")
             await writer.drain()
+            await _end_response_block()
 
     finally:
         LOG.info("RTI disconnected from %s", peer)
