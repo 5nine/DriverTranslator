@@ -4181,14 +4181,42 @@ async def handle_client(
             LOG.info("RTI <- %s", resp_line)
         writer.write(_crlf(resp_line))
 
+    async def _read_protocol_line() -> Optional[str]:
+        """
+        Read one controller command line, accepting CRLF, LF, or CR delimiters.
+        Some RTI driver flows may emit CR-only lines during reinitialize.
+        """
+        if not hasattr(_read_protocol_line, "_buf"):
+            setattr(_read_protocol_line, "_buf", bytearray())
+        buf: bytearray = getattr(_read_protocol_line, "_buf")
+        while True:
+            for i, b in enumerate(buf):
+                if b in (10, 13):  # LF or CR
+                    raw = bytes(buf[:i])
+                    j = i + 1
+                    # Collapse optional paired newline byte (CRLF / LFCR).
+                    if j < len(buf) and buf[j] in (10, 13) and buf[j] != b:
+                        j += 1
+                    del buf[:j]
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        return ""
+                    return line
+            chunk = await reader.read(4096)
+            if not chunk:
+                if buf:
+                    raw = bytes(buf)
+                    buf.clear()
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    return line or None
+                return None
+            buf.extend(chunk)
+
     try:
         while True:
-            raw = await reader.readline()
-            if not raw:
+            line = await _read_protocol_line()
+            if line is None:
                 break
-
-            # NHD-CTL expects last delimiter to be LF; tolerate CRLF.
-            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
             if not line:
                 continue
 
