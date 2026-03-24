@@ -4325,10 +4325,17 @@ async def handle_client(
                                 if rx_a in failed_rx:
                                     state.set_rx_all_media(rx_alias=rx_a, tx_alias=None)
                                     continue
-                                amx_tx_alias = _tx_alias_from_amx_stream(
-                                    cfg, (status_by_rx.get(rx_a, {}).get("STREAM") or "")
-                                )
-                                state.set_rx_all_media(rx_alias=rx_a, tx_alias=amx_tx_alias)
+                                stream_reported = (status_by_rx.get(rx_a, {}).get("STREAM") or "").strip()
+                                # If AMX did not return status for this RX (e.g. skipped/non-polled),
+                                # keep the requested route instead of forcing NULL.
+                                if not stream_reported:
+                                    state.set_rx_all_media(rx_alias=rx_a, tx_alias=tx_alias)
+                                else:
+                                    amx_tx_alias = _tx_alias_from_amx_stream(cfg, stream_reported)
+                                    state.set_rx_all_media(
+                                        rx_alias=rx_a,
+                                        tx_alias=(amx_tx_alias if amx_tx_alias is not None else tx_alias),
+                                    )
 
                         # Optional AMX verification (problems-only)
                         if (not cfg.amx_dry_run) and runtime.amx_verify_after_set and tx_alias is not None:
@@ -4434,10 +4441,16 @@ async def handle_client(
                                     if rx_a in failed_rx:
                                         state.set_breakaway(kind="video", tx_alias=None, rx_aliases=[rx_a])
                                         continue
-                                    amx_tx_alias = _tx_alias_from_amx_stream(
-                                        cfg, (status_by_rx.get(rx_a, {}).get("STREAM") or "")
-                                    )
-                                    state.set_breakaway(kind="video", tx_alias=amx_tx_alias, rx_aliases=[rx_a])
+                                    stream_reported = (status_by_rx.get(rx_a, {}).get("STREAM") or "").strip()
+                                    if not stream_reported:
+                                        state.set_breakaway(kind="video", tx_alias=tx_alias, rx_aliases=[rx_a])
+                                    else:
+                                        amx_tx_alias = _tx_alias_from_amx_stream(cfg, stream_reported)
+                                        state.set_breakaway(
+                                            kind="video",
+                                            tx_alias=(amx_tx_alias if amx_tx_alias is not None else tx_alias),
+                                            rx_aliases=[rx_a],
+                                        )
 
                                 if (not cfg.amx_dry_run) and runtime.amx_verify_after_set:
                                     expected = str(tx_obj.amx_stream)
@@ -4481,9 +4494,12 @@ async def handle_client(
                         rx_aliases_m = list(cfg.rx_by_alias.keys())
                     if len(rx_tokens) and len(rx_aliases_m) != len(rx_tokens):
                         continue
-                    for resp_line in _format_matrix_info(
+                    matrix_lines = _format_matrix_info(
                         heading="matrix", mapping=state.video, rx_aliases=rx_aliases_m
-                    ):
+                    )
+                    # Debug: log exact matrix-get payload emitted to RTI.
+                    LOG.info("RTI <- matrix get payload lines=%s", matrix_lines)
+                    for resp_line in matrix_lines:
                         _write_rti_line(resp_line)
                         await writer.drain()
                     # Match observed WyreStorm framing: terminate matrix blocks with blank lines.
@@ -4491,6 +4507,7 @@ async def handle_client(
                     await writer.drain()
                     _write_rti_line("")
                     await writer.drain()
+                    LOG.info("RTI <- matrix get payload terminator=CRLF,CRLF")
                     continue
                 # Examples:
                 # matrix video get [<RX...>]
@@ -4526,9 +4543,12 @@ async def handle_client(
                         await writer.drain()
                         continue
 
-                    for resp_line in _format_matrix_info(
+                    matrix_lines = _format_matrix_info(
                         heading=f"matrix {kind}", mapping=table, rx_aliases=rx_aliases
-                    ):
+                    )
+                    # Debug: log exact matrix-breakaway-get payload emitted to RTI.
+                    LOG.info("RTI <- matrix %s get payload lines=%s", kind, matrix_lines)
+                    for resp_line in matrix_lines:
                         _write_rti_line(resp_line)
                         await writer.drain()
                     # Match observed WyreStorm framing: terminate matrix blocks with blank lines.
@@ -4536,6 +4556,7 @@ async def handle_client(
                     await writer.drain()
                     _write_rti_line("")
                     await writer.drain()
+                    LOG.info("RTI <- matrix %s get payload terminator=CRLF,CRLF", kind)
                     continue
 
             if lower.startswith("config set session alias "):
