@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
-import collections
 import html
 import ipaddress
 import json
@@ -64,19 +63,26 @@ from .amx_protocol import (
     parse_amx_status as _parse_amx_status,
 )
 from .amx_client import AmxClient, DryRunAmxClient, PersistentAmxClient
+from .http_ui_session import (
+    issue_session_token as _http_ui_sess_issue,
+    parse_path_params as _http_parse_path_params,
+    valid_session_token as _http_ui_sess_valid,
+)
+from .log_ring import RingBufferLogHandler as _RingBufferLogHandler, get_log_tail as _get_log_tail
+from .problem_reporter import LocalProblemReporter
+from .system_control import do_reboot as _do_reboot, do_service_restart as _do_service_restart
 
 # Quick index (major sections in this file):
 # - Unknown-command tracking: unknown_ctl.py
 # - Config loading/validation: config_loader.py
-# - TCP helpers: networking.py; AMX status parsing: amx_protocol.py; AMX clients: amx_client.py
-# - RTI status reporting/notification
+# - TCP/AMX: networking.py, amx_protocol.py, amx_client.py
+# - Log ring: log_ring.py; HTTP UI session tokens: http_ui_session.py
+# - LocalProblemReporter: problem_reporter.py; reboot/restart: system_control.py
 # - HTTP status + control API/UI
 # - Shared controller/runtime state (models.py)
 # - RTI/NHD-CTL protocol helpers and command handlers
 # - Server bootstrap + process entrypoint
 LOG = logging.getLogger("drivertranslator")
-
-_LOG_RING: "collections.deque[str]" = collections.deque(maxlen=500)
 
 _config_write_lock = threading.Lock()
 _TX_STATUS_POLL_INTERVAL_SECONDS = 30
@@ -237,125 +243,6 @@ def _ctl_json(v: Any) -> str:
     s = json.dumps(v, separators=(", ", " : "), ensure_ascii=False)
     s = s.replace("{", "{ ").replace("}", " }").replace("[", "[ ").replace("]", " ]")
     return s
-
-
-# Short-lived tokens so the status page can call /control/* via fetch() (browsers do not send Basic Auth on fetch).
-_HTTP_UI_SESS_TTL_SEC = 30 * 60
-_HTTP_UI_SESS: Dict[str, float] = {}
-
-
-def _http_parse_path_params(path: str) -> Tuple[str, Dict[str, str]]:
-    if "?" not in path:
-        return path, {}
-    base, qs = path.split("?", 1)
-    params: Dict[str, str] = {}
-    for part in qs.split("&"):
-        if not part or "=" not in part:
-            continue
-        k, v = part.split("=", 1)
-        params[k] = urllib.parse.unquote_plus(v)
-    return base, params
-
-
-def _http_ui_sess_issue() -> str:
-    now = time.time()
-    for k, ts in list(_HTTP_UI_SESS.items()):
-        if now - ts > _HTTP_UI_SESS_TTL_SEC:
-            del _HTTP_UI_SESS[k]
-    tok = secrets.token_urlsafe(24)
-    _HTTP_UI_SESS[tok] = now
-    return tok
-
-
-def _http_ui_sess_valid(tok: str) -> bool:
-    if not tok:
-        return False
-    ts = _HTTP_UI_SESS.get(tok)
-    if ts is None:
-        return False
-    if time.time() - ts > _HTTP_UI_SESS_TTL_SEC:
-        with contextlib.suppress(KeyError):
-            del _HTTP_UI_SESS[tok]
-        return False
-    return True
-
-
-class _RingBufferLogHandler(logging.Handler):
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            msg = self.format(record)
-        except Exception:
-            msg = record.getMessage()
-        _LOG_RING.append(msg)
-
-
-class LocalProblemReporter:
-    def __init__(
-        self,
-        *,
-        min_interval_seconds: int = 10,
-        repeat_suppression_seconds: int = 300,
-    ) -> None:
-        self._min_interval = max(0, int(min_interval_seconds))
-        self._repeat_suppression = max(0, int(repeat_suppression_seconds))
-        self._last_sent_at: Dict[str, float] = {}
-        self._last_sent_msg: Dict[str, str] = {}
-        self._problems: Optional[ProblemState] = None
-
-    def attach_problem_state(self, problems: ProblemState) -> None:
-        self._problems = problems
-
-    async def problem(self, key: str, message: str) -> None:
-        """
-        Problems-only notification with anti-spam:
-        - per-key minimum interval
-        - suppress identical messages for a longer window
-        """
-        now = time.monotonic()
-        last_at = self._last_sent_at.get(key)
-        last_msg = self._last_sent_msg.get(key)
-
-        msg = message.strip()
-        if last_msg == msg and last_at is not None and (now - last_at) < self._repeat_suppression:
-            return
-        if last_at is not None and (now - last_at) < self._min_interval:
-            return
-
-        self._last_sent_at[key] = now
-        self._last_sent_msg[key] = msg
-        # Always log locally (and on the status page log tail).
-        LOG.error("%s", msg)
-        if self._problems is not None:
-            with contextlib.suppress(Exception):
-                await self._problems.record(key=key, message=msg)
-
-
-async def _do_reboot(*, reason: str) -> None:
-    LOG.error("REBOOT requested: %s", reason)
-    await asyncio.sleep(1.0)
-    try:
-        subprocess.Popen(["/usr/bin/systemctl", "reboot"])
-    except FileNotFoundError:
-        subprocess.Popen(["systemctl", "reboot"])
-
-
-async def _do_service_restart(*, reason: str) -> None:
-    LOG.warning("SERVICE RESTART requested: %s", reason)
-    await asyncio.sleep(0.5)
-    cmds = [
-        ["/usr/bin/systemctl", "restart", "drivertranslator"],
-        ["systemctl", "restart", "drivertranslator"],
-    ]
-    for cmd in cmds:
-        try:
-            subprocess.Popen(cmd)
-            return
-        except FileNotFoundError:
-            continue
-        except Exception:
-            LOG.exception("Failed to execute service restart command: %r", cmd)
-            return
-    LOG.error("Unable to restart service: systemctl not found")
 
 
 async def _amx_self_test(*, cfg: Config, amx: Any) -> Dict[str, Any]:
@@ -555,13 +442,6 @@ def _build_status_snapshot(*, cfg: Config, health: HealthState, amx: Any, starte
         "amx_connected": amx_connected,
         "amx_total_known": amx_total_known,
     }
-
-def _get_log_tail(n: int) -> List[str]:
-    n = max(0, min(int(n), 500))
-    if n == 0:
-        return []
-    return list(_LOG_RING)[-n:]
-
 
 # ---------------------------------------------------------------------------
 # HTTP status and control surface
