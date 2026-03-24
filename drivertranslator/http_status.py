@@ -8,7 +8,15 @@ import logging
 import urllib.parse
 from typing import Any, Awaitable, Callable, Dict
 
+from .av_scan import (
+    check_av_bind_address,
+    infer_default_scan_range,
+    next_suggested_aliases,
+    request_av_scan_cancel,
+    scan_av_network,
+)
 from .config_persistence import (
+    append_av_endpoints_to_config,
     load_endpoint_inventory,
     persist_endpoint_skip_to_config,
     persist_endpoints_to_config,
@@ -129,6 +137,9 @@ async def handle_http_client(
         # /control/restart
         # /control/reboot
         # /control/clear_unknown_ctl
+        # /control/av_scan_abort[&token=]
+        # /control/av_scan?range=<cidr|start-end>[&token=]
+        # /control/add_av_endpoints?tx_ips=a,b&rx_ips=c,d[&token=]
         if path.startswith("/control/"):
             # very small query parsing (no urllib dependency)
             qs = ""
@@ -468,6 +479,70 @@ async def handle_http_client(
                     writer.write(http_response("200 OK", "application/json", body))
                 return
 
+            if path.startswith("/control/add_av_endpoints"):
+                tx_raw = urllib.parse.unquote_plus(params.get("tx_ips", "").strip())
+                rx_raw = urllib.parse.unquote_plus(params.get("rx_ips", "").strip())
+                tx_ips = [x.strip() for x in tx_raw.split(",") if x.strip()]
+                rx_ips = [x.strip() for x in rx_raw.split(",") if x.strip()]
+                try:
+                    res = append_av_endpoints_to_config(
+                        config_path=config_path,
+                        tx_ips=tx_ips,
+                        rx_ips=rx_ips,
+                    )
+                except Exception as e:
+                    LOG.warning(
+                        "HTTP control [source=%s]: add_av_endpoints failed tx_ips=%r rx_ips=%r err=%s",
+                        ctl_via,
+                        tx_ips,
+                        rx_ips,
+                        e,
+                    )
+                    body = (json.dumps({"ok": False, "error": str(e)}, indent=2) + "\n").encode("utf-8")
+                    writer.write(http_response("400 Bad Request", "application/json", body))
+                    return
+                LOG.info(
+                    "HTTP control [source=%s]: add_av_endpoints added_tx=%s added_rx=%s skipped=%s",
+                    ctl_via,
+                    res.get("added_tx"),
+                    res.get("added_rx"),
+                    res.get("skipped"),
+                )
+                body = (json.dumps(res, indent=2) + "\n").encode("utf-8")
+                writer.write(http_response("200 OK", "application/json", body))
+                return
+
+            if path.startswith("/control/av_scan_abort"):
+                request_av_scan_cancel()
+                LOG.info("HTTP control [source=%s]: av_scan_abort requested", ctl_via)
+                body = (json.dumps({"ok": True, "cancel_requested": True}, indent=2) + "\n").encode("utf-8")
+                writer.write(http_response("200 OK", "application/json", body))
+                return
+
+            if path.startswith("/control/av_scan"):
+                range_spec = urllib.parse.unquote_plus(params.get("range", "").strip())
+                if not range_spec:
+                    range_spec = infer_default_scan_range(cfg)
+                res = await scan_av_network(cfg=cfg, runtime=runtime, range_spec=range_spec)
+                if res.get("ok"):
+                    res["suggested_aliases"] = next_suggested_aliases(cfg)
+                    res["default_range_hint"] = infer_default_scan_range(cfg)
+                LOG.info(
+                    "HTTP control [source=%s]: av_scan range=%r ok=%s found=%s cancelled=%s",
+                    ctl_via,
+                    range_spec,
+                    res.get("ok"),
+                    len(res.get("found") or []) if isinstance(res.get("found"), list) else None,
+                    res.get("cancelled"),
+                )
+                if not res.get("ok"):
+                    body = (json.dumps(res, indent=2) + "\n").encode("utf-8")
+                    writer.write(http_response("400 Bad Request", "application/json", body))
+                    return
+                body = (json.dumps(res, indent=2) + "\n").encode("utf-8")
+                writer.write(http_response("200 OK", "application/json", body))
+                return
+
             if path.startswith("/control/clear_unknown_ctl"):
                 unknown_ctl_clear_persisted()
                 LOG.info("HTTP control [source=%s]: cleared unknown_ctl list", ctl_via)
@@ -635,6 +710,20 @@ async def handle_http_client(
             _ui_sess_js = json.dumps(_ui_sess)
             _ctl_qs_js = json.dumps(ctl_qs)
             _amx_port = int(cfg.amx_decoder_port)
+            _av_bind_ok, _av_bind_msg = check_av_bind_address(cfg.amx_bind_address)
+            _av_default_range = infer_default_scan_range(cfg)
+            _av_sug = next_suggested_aliases(cfg)
+            _av_scan_js = json.dumps(
+                {
+                    "defaultRange": _av_default_range,
+                    "bindOk": _av_bind_ok,
+                    "bindMsg": _av_bind_msg,
+                    "dryRun": cfg.amx_dry_run,
+                    "bindAddress": cfg.amx_bind_address,
+                    "suggestedNextTx": _av_sug["next_tx_alias"],
+                    "suggestedNextRx": _av_sug["next_rx_alias"],
+                }
+            )
             _unknown_pre = html.escape(unknown_ctl_page_text())
             _uc_path = unknown_ctl_persist_file()
             if _uc_path is not None:
@@ -984,6 +1073,27 @@ async def handle_http_client(
     .dt-modal-card.dt-bad h2 {{ color: #b91c1c; }}
     [data-theme="dark"] .dt-modal-card.dt-ok h2 {{ color: #4ade80; }}
     [data-theme="dark"] .dt-modal-card.dt-bad h2 {{ color: #f87171; }}
+    .av-scan-card h2 {{ font-size: 1.15rem; }}
+    .av-scan-table th, .av-scan-table td {{ padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); }}
+    .av-scan-table th {{ color: var(--muted); font-weight: 600; font-size: 12px; }}
+    .av-scan-table tr:last-child td {{ border-bottom: none; }}
+    .av-scan-card {{ position: relative; }}
+    .av-scan-busy[hidden] {{ display: none !important; }}
+    .av-scan-busy:not([hidden]) {{
+      position: absolute; inset: 0; z-index: 25; border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(15, 23, 42, 0.72);
+      backdrop-filter: blur(2px);
+    }}
+    .av-scan-busy-inner {{ text-align: center; padding: 0 20px; max-width: 320px; }}
+    .av-scan-busy-title {{ margin: 0 0 6px 0; font-size: 1.15rem; font-weight: 700; color: #f8fafc; }}
+    .av-scan-busy-sub {{ margin: 0 0 16px 0; font-size: 13px; color: #cbd5e1; }}
+    .av-scan-spinner {{
+      width: 36px; height: 36px; margin: 0 auto 14px;
+      border: 3px solid rgba(255,255,255,0.25); border-top-color: #93c5fd;
+      border-radius: 50%; animation: av-spin 0.75s linear infinite;
+    }}
+    @keyframes av-spin {{ to {{ transform: rotate(360deg); }} }}
   </style>
 </head>
 <body>
@@ -1074,6 +1184,10 @@ async def handle_http_client(
       <div class="ctrl-actions"><button type="button" class="ctrl-run" data-dt-ctl="selftest">Run now</button></div>
     </div>
     <div class="row">
+      <div><b>Scan AV network</b><span class="help-icon" title="Probes each IPv4 in the range on the AMX TCP port and classifies encoders vs decoders from AMX status. Requires amx.bind_address to be usable on this host when set. Not available when AMX dry-run is enabled. Avoid during opening hours — probing can cause AMX control reconnects. New devices are merged into endpoints (restart required).">?</span></div>
+      <div class="ctrl-actions"><button type="button" class="ctrl-run" id="avScanOpenBtn">Scan…</button></div>
+    </div>
+    <div class="row">
       <div><b>Restart DriverTranslator</b><span class="help-icon" title="Restarts only the DriverTranslator service (systemctl restart drivertranslator). Brief control interruption expected.">?</span></div>
       <div class="ctrl-actions"><button type="button" class="ctrl-run" data-dt-ctl="restart">Restart</button></div>
     </div>
@@ -1114,10 +1228,46 @@ async def handle_http_client(
       <button type="button" class="btn btn-primary" id="dtModalOk">OK</button>
     </div>
   </div>
+
+  <div id="avScanModal" class="dt-modal" hidden>
+    <div class="dt-modal-backdrop" id="avScanBackdrop"></div>
+    <div class="dt-modal-card av-scan-card" role="dialog" aria-modal="true" aria-labelledby="avScanTitle" style="max-width: 640px;">
+      <h2 id="avScanTitle">Scan AV network</h2>
+      <p id="avScanBindLine" class="subtle" style="margin-top:0"></p>
+      <div class="sf-item" style="margin-bottom:10px">
+        <label for="avScanRange">IPv4 range (CIDR or start–end)</label>
+        <input id="avScanRange" class="btn" style="padding:6px 8px;width:100%;box-sizing:border-box" type="text" />
+      </div>
+      <div class="ctrl-actions" style="margin-bottom:12px">
+        <button type="button" class="ctrl-run" id="avScanRunBtn">Run scan</button>
+        <button type="button" class="btn" id="avScanCloseBtn">Close</button>
+      </div>
+      <p id="avScanStatus" class="subtle" style="min-height:1.2em;margin-bottom:8px"></p>
+      <div style="overflow:auto;max-height:280px;border:1px solid var(--border);border-radius:8px">
+        <table class="av-scan-table" style="width:100%;font-size:13px;border-collapse:collapse">
+          <thead><tr><th style="width:36px"></th><th>IP</th><th>Role</th><th>Note</th></tr></thead>
+          <tbody id="avScanTbody"></tbody>
+        </table>
+      </div>
+      <p id="avScanHint" class="subtle" style="margin-top:10px;margin-bottom:0;font-size:12px"></p>
+      <div class="ctrl-actions" style="margin-top:12px">
+        <button type="button" class="btn btn-primary ctrl-run" id="avScanAddBtn" disabled>Add selected to project</button>
+      </div>
+      <div id="avScanBusyOverlay" class="av-scan-busy" hidden>
+        <div class="av-scan-busy-inner">
+          <div class="av-scan-spinner" aria-hidden="true"></div>
+          <p class="av-scan-busy-title">Scanning…</p>
+          <p class="av-scan-busy-sub">Probing up to 48 addresses at a time. This can take a while on large ranges.</p>
+          <button type="button" class="btn" id="avScanAbortBtn" style="background:var(--card);color:var(--fg);border:1px solid var(--border)">Abort</button>
+        </div>
+      </div>
+    </div>
+  </div>
   </div>
   <script>
     (function () {{
       const DT_UI = {{ sess: {_ui_sess_js}, ctl: {_ctl_qs_js}, port: {_amx_port} }};
+      const DT_AV = {_av_scan_js};
       function ctlUrl(path) {{
         const sep = path.indexOf('?') >= 0 ? '&' : '?';
         let u = path + sep + 'ui_sess=' + encodeURIComponent(DT_UI.sess);
@@ -1406,6 +1556,209 @@ async def handle_http_client(
           }}
         }});
       }});
+
+      (function avScanUi() {{
+        const avModal = document.getElementById('avScanModal');
+        const avRange = document.getElementById('avScanRange');
+        const avBindLine = document.getElementById('avScanBindLine');
+        const avStatus = document.getElementById('avScanStatus');
+        const avTbody = document.getElementById('avScanTbody');
+        const avHint = document.getElementById('avScanHint');
+        const avOpen = document.getElementById('avScanOpenBtn');
+        const avClose = document.getElementById('avScanCloseBtn');
+        const avRun = document.getElementById('avScanRunBtn');
+        const avAdd = document.getElementById('avScanAddBtn');
+        const avBackdrop = document.getElementById('avScanBackdrop');
+        const avBusy = document.getElementById('avScanBusyOverlay');
+        const avAbort = document.getElementById('avScanAbortBtn');
+
+        function setAvScanBusy(on) {{
+          if (avBusy) avBusy.hidden = !on;
+          if (avRun) avRun.disabled = !!on;
+          if (avClose) avClose.disabled = !!on;
+          if (avAbort) avAbort.disabled = !on;
+        }}
+
+        if (avAbort) {{
+          avAbort.addEventListener('click', () => {{
+            fetch(ctlUrl('/control/av_scan_abort')).catch(() => {{}});
+            if (avStatus) avStatus.textContent = 'Stopping after current probe batch…';
+          }});
+        }}
+
+        if (!avModal || !avRange || !avOpen) return;
+
+        function showAvScan() {{
+          if (DT_AV.dryRun) {{
+            showModal(false, 'Not available', 'Not available in dry-run mode');
+            return;
+          }}
+          avRange.value = DT_AV.defaultRange || '';
+          const bindOk = !!DT_AV.bindOk;
+          const b = (DT_AV.bindAddress || '').toString();
+          if (b) {{
+            avBindLine.textContent = (bindOk ? '✓ ' : '✗ ') + (DT_AV.bindMsg || '') +
+              ' (amx.bind_address: ' + b + ')';
+          }} else {{
+            avBindLine.textContent = (DT_AV.bindMsg || '') + ' (no amx.bind_address)';
+          }}
+          avBindLine.style.color = bindOk ? 'var(--muted)' : '#b91c1c';
+          if (avTbody) avTbody.innerHTML = '';
+          if (avStatus) avStatus.textContent = '';
+          if (avHint) {{
+            avHint.textContent = 'Next suggested aliases if you add devices: TX ' + (DT_AV.suggestedNextTx || '') +
+              ', RX ' + (DT_AV.suggestedNextRx || '');
+          }}
+          if (avAdd) avAdd.disabled = true;
+          setAvScanBusy(false);
+          avModal.removeAttribute('hidden');
+        }}
+        function hideAvScan() {{ avModal.setAttribute('hidden', ''); }}
+        avOpen.addEventListener('click', showAvScan);
+        if (avClose) avClose.addEventListener('click', hideAvScan);
+        if (avBackdrop) avBackdrop.addEventListener('click', hideAvScan);
+
+        function refreshAvScanAddState() {{
+          if (!avTbody || !avAdd) return;
+          const n = avTbody.querySelectorAll('input[type=checkbox]:checked:not(:disabled)').length;
+          avAdd.disabled = n === 0;
+        }}
+
+        if (avTbody) {{
+          avTbody.addEventListener('change', refreshAvScanAddState);
+        }}
+
+        if (avRun) {{
+          avRun.addEventListener('click', async () => {{
+            const range = (avRange && avRange.value) ? avRange.value.trim() : '';
+            if (!range) {{
+              showModal(false, 'Range required', 'Enter an IPv4 CIDR (e.g. 192.168.10.0/24) or start–end range.');
+              return;
+            }}
+            if (!confirm(
+              'Warning: This scan opens brief TCP connections to many addresses. AMX devices often allow only one TCP session; probing can force control reconnects or failed probes. Do not run during opening hours or while the system is in use. Continue?'
+            )) return;
+            if (avStatus) avStatus.textContent = '';
+            if (avTbody) avTbody.innerHTML = '';
+            if (avAdd) avAdd.disabled = true;
+            setAvScanBusy(true);
+            try {{
+              const r = await fetch(ctlUrl('/control/av_scan?range=' + encodeURIComponent(range)));
+              const t = await r.text();
+              let j = null;
+              try {{ j = JSON.parse(t); }} catch (e) {{}}
+              if (r.status === 401) {{
+                showModal(false, 'Session expired', 'Refresh this page and sign in again, then retry.');
+                return;
+              }}
+              if (r.status === 403) {{
+                showModal(false, 'Not allowed', 'Wrong or missing control token in config.');
+                return;
+              }}
+              if (!r.ok) {{
+                showModal(false, 'Scan failed', (j && j.error) ? j.error : (t.slice(0, 400) || r.statusText));
+                if (avStatus) avStatus.textContent = '';
+                return;
+              }}
+              if (!j) {{
+                showModal(false, 'Bad response', 'Could not parse JSON.');
+                return;
+              }}
+              const found = j.found || [];
+              const sc = j.scanned != null ? j.scanned : '?';
+              if (avStatus) {{
+                if (j.cancelled) {{
+                  const done = j.completed_probes != null ? j.completed_probes : '?';
+                  avStatus.textContent = 'Scan cancelled after ' + done + ' of ' + sc + ' probes. Found ' + found.length + ' device(s).';
+                }} else {{
+                  avStatus.textContent = 'Probed ' + sc + ' address(es), found ' + found.length + ' device(s).';
+                }}
+              }}
+              if (avTbody) {{
+                avTbody.innerHTML = '';
+                found.forEach(function (row) {{
+                  const tr = document.createElement('tr');
+                  const dup = !!row.duplicate;
+                  const kind = row.kind === 'tx' ? 'TX' : 'RX';
+                  const note = (row.duplicate_note || (dup ? 'Already in project' : '')) || '';
+                  const ip = row.ip || '';
+                  tr.innerHTML =
+                    '<td><input type="checkbox" data-kind="' + (row.kind || '') + '" data-ip="' +
+                    ip.replace(/"/g, '') + '" ' + (dup ? 'disabled title="Already in project"' : '') + '/></td>' +
+                    '<td><code>' + ip + '</code></td><td>' + kind + '</td><td>' +
+                    (note.replace(/</g, '&lt;')) + '</td>';
+                  avTbody.appendChild(tr);
+                }});
+              }}
+              refreshAvScanAddState();
+              if (avHint && j.suggested_aliases) {{
+                const stx = j.suggested_aliases.next_tx_alias || '';
+                const srx = j.suggested_aliases.next_rx_alias || '';
+                avHint.textContent = 'Suggested next aliases: TX ' + stx + ', RX ' + srx;
+              }}
+            }} catch (e) {{
+              showModal(false, 'Network error', String(e.message || e));
+            }} finally {{
+              setAvScanBusy(false);
+            }}
+          }});
+        }}
+
+        if (avAdd) {{
+          avAdd.addEventListener('click', async () => {{
+            const tx = [];
+            const rx = [];
+            if (avTbody) {{
+              avTbody.querySelectorAll('input[type=checkbox]:checked:not(:disabled)').forEach(function (cb) {{
+                const k = cb.getAttribute('data-kind');
+                const ip = cb.getAttribute('data-ip');
+                if (!ip) return;
+                if (k === 'tx') tx.push(ip);
+                else if (k === 'rx') rx.push(ip);
+              }});
+            }}
+            if (!tx.length && !rx.length) return;
+            if (!confirm('Add ' + tx.length + ' TX and ' + rx.length + ' RX to config? Restart DriverTranslator to apply.')) return;
+            setBusy(true);
+            try {{
+              const r = await fetch(ctlUrl(
+                '/control/add_av_endpoints?tx_ips=' + encodeURIComponent(tx.join(',')) +
+                '&rx_ips=' + encodeURIComponent(rx.join(','))
+              ));
+              const t = await r.text();
+              let j = null;
+              try {{ j = JSON.parse(t); }} catch (e) {{}}
+              if (r.status === 401) {{
+                showModal(false, 'Session expired', 'Refresh this page and sign in again, then retry.');
+                return;
+              }}
+              if (r.status === 403) {{
+                showModal(false, 'Not allowed', 'Wrong or missing control token in config.');
+                return;
+              }}
+              if (!r.ok) {{
+                showModal(false, 'Add failed', (j && j.error) ? j.error : (t.slice(0, 400) || r.statusText));
+                return;
+              }}
+              let detail = 'Restart DriverTranslator to load new endpoints.';
+              if (j) {{
+                const at = (j.added_tx || []).length, ar = (j.added_rx || []).length;
+                const sk = j.skipped || [];
+                detail = 'Added TX: ' + at + ', RX: ' + ar + '.';
+                if (sk.length) detail += ' Skipped: ' + sk.join('; ') + '.';
+                detail += ' Restart DriverTranslator to apply.';
+              }}
+              showModal(true, 'Endpoints updated', detail);
+              hideAvScan();
+              await refreshLiveSections();
+            }} catch (e) {{
+              showModal(false, 'Network error', String(e.message || e));
+            }} finally {{
+              setBusy(false);
+            }}
+          }});
+        }}
+      }})();
 
       document.querySelectorAll('[data-dt-ctl="copy_unknown_ctl"]').forEach((btn) => {{
         btn.addEventListener('click', async () => {{
