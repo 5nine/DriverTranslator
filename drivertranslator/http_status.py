@@ -791,10 +791,15 @@ async def handle_http_client(
             mrx_rows = sorted(cfg.rx_by_alias.keys(), key=rx_alias_sort_key)
             matrix_rows_parts: List[str] = []
             if mrx_rows:
+                show_none_col = any(state.video.get(rx) is None for rx in mrx_rows)
                 th_tx = "".join(
                     f'<th scope="col" title="{html.escape(tx)}">{html.escape(tx)}</th>' for tx in mtx_cols
                 )
-                th_all = '<th scope="col" title="No input (NULL)">None</th>'
+                th_all = (
+                    '<th scope="col" title="No input (NULL) — status only; use RTI to assign NULL">None</th>'
+                    if show_none_col
+                    else ""
+                )
                 for rx in mrx_rows:
                     rx_skip = rx in cfg.rx_skipped_aliases
                     cur = state.video.get(rx)
@@ -814,18 +819,18 @@ async def handle_http_client(
                             f'data-matrix-tx="{html.escape(tx)}"{dis} '
                             f'aria-label="Route {html.escape(rx)} to {html.escape(tx)}"></button></td>'
                         )
-                    disabled_n = rx_skip
-                    is_on_n = not disabled_n and cur is None
-                    btn_cls = "dt-matrix-cell"
-                    if is_on_n:
-                        btn_cls += " dt-matrix-on"
-                    if disabled_n:
-                        btn_cls += " dt-matrix-skip"
-                    dis = " disabled" if disabled_n else ""
-                    tds.append(
-                        f'<td><button type="button" class="{btn_cls}" data-matrix-rx="{html.escape(rx)}" '
-                        f'data-matrix-tx="NULL"{dis} aria-label="Clear input for {html.escape(rx)}"></button></td>'
-                    )
+                    if show_none_col:
+                        is_on_n = not rx_skip and cur is None
+                        btn_cls = "dt-matrix-cell dt-matrix-none"
+                        if is_on_n:
+                            btn_cls += " dt-matrix-on"
+                        if rx_skip:
+                            btn_cls += " dt-matrix-skip"
+                        tds.append(
+                            f'<td><button type="button" class="{btn_cls}" data-matrix-rx="{html.escape(rx)}" '
+                            f'data-matrix-tx="NULL" disabled '
+                            f'aria-label="No input (NULL) for {html.escape(rx)}"></button></td>'
+                        )
                     matrix_rows_parts.append("<tr>" + "".join(tds) + "</tr>")
                 matrix_table_html = (
                     '<div class="table-wrap dt-matrix-wrap"><table class="dt-matrix-table" role="grid">'
@@ -877,7 +882,7 @@ async def handle_http_client(
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>DriverTranslator Status</title>
+  <title>Conductor One by Integrion</title>
   <style>
     :root {{
       color-scheme: light dark;
@@ -984,14 +989,28 @@ async def handle_http_client(
       gap: 12px 20px;
     }}
     .dt-menubar-brand {{
-      font-size: 1.35rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: flex-start;
+      line-height: 1.12;
+      font-family: Cambria, "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
       color: var(--fg);
       text-decoration: none;
-      white-space: nowrap;
+    }}
+    .dt-brand-main {{
+      font-size: 1.42rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }}
+    .dt-brand-sub {{
+      font-size: 0.62rem;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-top: 1px;
     }}
     .dt-menubar-brand:hover {{ color: var(--link); text-decoration: none; }}
+    .dt-menubar-brand:hover .dt-brand-sub {{ color: var(--link); }}
     .dt-footer {{
       margin-top: 36px;
       padding-top: 20px;
@@ -1292,6 +1311,7 @@ async def handle_http_client(
       background: #15803d; border-color: #166534;
     }}
     .dt-matrix-cell.dt-matrix-skip {{ opacity: 0.4; cursor: not-allowed; }}
+    .dt-matrix-cell.dt-matrix-none {{ cursor: default; }}
     .dt-matrix-cell.dt-matrix-busy {{ opacity: 0.55; pointer-events: none; }}
     .dt-page[hidden] {{ display: none !important; }}
     .dt-page > .section-title:first-child {{ margin-top: 0; }}
@@ -1300,7 +1320,7 @@ async def handle_http_client(
 <body>
   <header class="dt-menubar">
     <div class="dt-menubar-inner">
-      <a href="/home" class="dt-menubar-brand">DriverTranslator</a>
+      <a href="/home" class="dt-menubar-brand"><span class="dt-brand-main">Conductor One</span><span class="dt-brand-sub">by Integrion</span></a>
       <nav class="dt-nav" aria-label="Main">
         <a href="/home" class="dt-nav-link{_nav_active('home')}">Home</a>
         <a href="/controls" class="dt-nav-link{_nav_active('controls')}">Controls</a>
@@ -1433,8 +1453,8 @@ async def handle_http_client(
 
   <section id="page-matrix" class="dt-page"{_page_hidden('matrix')}>
   <div class="section-title">Matrix</div>
-  <p class="subtle">Click a cell to assign that RX to a TX (same as <code>matrix set …</code> on the RTI port). Skipped endpoints are disabled.</p>
-  <div class="card">
+  <p class="subtle">Click a TX cell to assign that RX (same as <code>matrix set …</code> on the RTI port). The None column appears only when at least one RX has no input; it shows status and cannot set NULL here (use RTI for <code>matrix set NULL …</code>). Skipped endpoints are disabled.</p>
+  <div class="card" id="matrixCard">
     {matrix_table_html}
   </div>
   </section>
@@ -2081,7 +2101,7 @@ async def handle_http_client(
       if (pageMatrix) {{
         pageMatrix.addEventListener('click', async (e) => {{
           const btn = e.target.closest('.dt-matrix-cell');
-          if (!btn || btn.disabled || btn.classList.contains('dt-matrix-skip')) return;
+          if (!btn || btn.disabled || btn.classList.contains('dt-matrix-skip') || btn.classList.contains('dt-matrix-none')) return;
           const rx = btn.getAttribute('data-matrix-rx');
           const tx = btn.getAttribute('data-matrix-tx');
           if (!rx || tx === null || tx === undefined) return;
@@ -2111,7 +2131,7 @@ async def handle_http_client(
           }} finally {{
             cells.forEach((el) => {{
               el.classList.remove('dt-matrix-busy');
-              if (!el.classList.contains('dt-matrix-skip')) el.disabled = false;
+              if (!el.classList.contains('dt-matrix-skip') && !el.classList.contains('dt-matrix-none')) el.disabled = false;
             }});
           }}
         }});
@@ -2121,10 +2141,11 @@ async def handle_http_client(
       const devicesBodyEl = document.getElementById('devicesBody');
       const logsPreEl = document.getElementById('logsPre');
       const unknownCtlPreEl = document.getElementById('unknownCtlPre');
+      const matrixCardEl = document.getElementById('matrixCard');
       let refreshInFlight = false;
       function shouldAutoRefresh() {{
         const p = window.location.pathname || '/';
-        if (p === '/controls' || p === '/matrix') return false;
+        if (p === '/controls') return false;
         return true;
       }}
       async function refreshLiveSections() {{
@@ -2149,6 +2170,10 @@ async def handle_http_client(
           }}
           if (logsPreEl && newLogsPre) logsPreEl.textContent = newLogsPre.textContent || '';
           if (unknownCtlPreEl && newUnknownPre) unknownCtlPreEl.textContent = newUnknownPre.textContent || '';
+          const newMatrixCard = doc.getElementById('matrixCard');
+          if (matrixCardEl && newMatrixCard) {{
+            matrixCardEl.innerHTML = newMatrixCard.innerHTML;
+          }}
         }} catch (_e) {{
           // keep page usable on transient refresh errors
         }} finally {{
