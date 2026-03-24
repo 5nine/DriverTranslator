@@ -615,7 +615,22 @@ async def handle_http_client(
             writer.write(http_response("404 Not Found", "text/plain", b"not found"))
             return
 
-        if path == "/" or path.startswith("/?"):
+        # Same HTML for /, /home, /controls, /status, /matrix — one <section> shown per path.
+        if path_only in ("/", "/home", "/controls", "/status", "/matrix") or path.startswith("/?"):
+            initial_page = "home"
+            if path_only == "/controls":
+                initial_page = "controls"
+            elif path_only == "/status":
+                initial_page = "status"
+            elif path_only == "/matrix":
+                initial_page = "matrix"
+
+            def _page_hidden(name: str) -> str:
+                return "" if initial_page == name else " hidden"
+
+            def _nav_active(name: str) -> str:
+                return " dt-nav-active" if initial_page == name else ""
+
             uptime_h = format_uptime(int(snapshot["uptime_seconds"]))
             amx_conn = (
                 f"{snapshot['amx_connected']}/{max(snapshot['amx_total_known'] or 0, snapshot['rx_configured'])}"
@@ -1094,6 +1109,30 @@ async def handle_http_client(
       border-radius: 50%; animation: av-spin 0.75s linear infinite;
     }}
     @keyframes av-spin {{ to {{ transform: rotate(360deg); }} }}
+
+    .dt-nav {{
+      border-top: 1px solid var(--border);
+      padding-top: 14px;
+      margin: 0 0 22px 0;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 20px;
+    }}
+    .dt-nav-link {{
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: var(--muted);
+      text-decoration: none;
+    }}
+    .dt-nav-link:hover {{ color: var(--link); }}
+    .dt-nav-link.dt-nav-active {{
+      color: var(--link);
+      text-decoration: underline;
+      text-underline-offset: 4px;
+    }}
+    .dt-page[hidden] {{ display: none !important; }}
+    .dt-page > .section-title:first-child {{ margin-top: 0; }}
   </style>
 </head>
 <body>
@@ -1101,13 +1140,21 @@ async def handle_http_client(
   <div class="topbar">
     <div class="brand">
       <h1>DriverTranslator</h1>
-      <span>Status &amp; controls · matrix, logs, and unrecognized commands update every 5s while this tab is visible (in-page fetch, not a full reload)</span>
+      <span>Use the links below. <b>Home</b> and <b>Status</b> auto-refresh every 5s while this tab is visible. <b>Controls</b> and <b>Matrix</b> load fresh when you open them (no background polling).</span>
     </div>
     <button class="btn" id="themeBtn" type="button">Theme</button>
   </div>
 
+  <nav class="dt-nav" aria-label="Main">
+    <a href="/home" class="dt-nav-link{_nav_active('home')}">Home</a>
+    <a href="/controls" class="dt-nav-link{_nav_active('controls')}">Controls</a>
+    <a href="/status" class="dt-nav-link{_nav_active('status')}">Status</a>
+    <a href="/matrix" class="dt-nav-link{_nav_active('matrix')}">Matrix</a>
+  </nav>
+
+  <section id="page-home" class="dt-page"{_page_hidden('home')}>
   <div class="section-title">Overview</div>
-  <div class="card">
+  <div class="card" id="homeOverviewCard">
     <div class="row"><div>Uptime</div><div><code>{uptime_h}</code></div></div>
     <div class="row"><div>Mode</div><div><code>{snapshot['mode']}</code></div></div>
     <div class="row"><div>RTI clients</div><div><code>{snapshot['rti_clients']}</code></div></div>
@@ -1115,7 +1162,9 @@ async def handle_http_client(
     <div class="row"><div>Configured RX</div><div><code id="st_rx_configured">{snapshot['rx_configured']}</code></div></div>
     <div class="row"><div>AMX connections</div><div><code>{amx_conn}</code></div></div>
   </div>
+  </section>
 
+  <section id="page-controls" class="dt-page"{_page_hidden('controls')}>
   <div class="section-title">Controls</div>
   <p class="subtle">Control changes are saved to config and survive restart/reboot. Hover <span class="help-icon" style="cursor:default" title="Each control has a ? with full help.">?</span> for details. Results open in a short on-page message.</p>
   <div class="card">
@@ -1196,13 +1245,15 @@ async def handle_http_client(
       <div class="ctrl-actions"><button type="button" class="ctrl-run" data-dt-ctl="reboot">Reboot</button></div>
     </div>
   </div>
+  </section>
 
-  <div class="section-title">Matrix</div>
-  <p class="subtle">Combined TX/RX matrix view. TX rows are polled from AMX <code>getStatus</code> every {TX_STATUS_POLL_INTERVAL_SECONDS}s. RX rows show routed source and HDMI output (<code>HDMIOFF</code>: <code>ON</code>=enabled, <code>OFF</code>=disabled). Skip toggles are saved to config and apply after restart.</p>
+  <section id="page-status" class="dt-page"{_page_hidden('status')}>
+  <div class="section-title">Devices</div>
+  <p class="subtle">TX and RX devices with routing and status. TX rows are polled from AMX <code>getStatus</code> every {TX_STATUS_POLL_INTERVAL_SECONDS}s. RX rows show routed source and HDMI output (<code>HDMIOFF</code>: <code>ON</code>=enabled, <code>OFF</code>=disabled). Skip toggles are saved to config and apply after restart.</p>
   <div class="table-wrap">
   <table>
     <thead><tr><th>Endpoint</th><th>Route / Stream</th><th>Status</th><th>Signal</th><th>Skip</th></tr></thead>
-    <tbody id="matrixBody">
+    <tbody id="devicesBody">
       {route_html}
     </tbody>
   </table>
@@ -1219,6 +1270,15 @@ async def handle_http_client(
     <button type="button" class="ctrl-run" data-dt-ctl="clear_unknown_ctl">Clear unrecognized list</button>
     <span class="subtle" style="display:block;margin-top:8px;margin-bottom:0;">Wipes this list and the on-disk file (when persistence is enabled). Page reloads after confirm.</span>
   </div>
+  </section>
+
+  <section id="page-matrix" class="dt-page"{_page_hidden('matrix')}>
+  <div class="section-title">Matrix</div>
+  <p class="subtle">Interactive drag-and-drop matrix — not implemented yet.</p>
+  <div class="card">
+    <p class="subtle" style="margin:0">Placeholder: a drag-and-drop matrix view will live here.</p>
+  </div>
+  </section>
 
   <div id="dtModal" class="dt-modal" hidden>
     <div class="dt-modal-backdrop" id="dtModalBackdrop"></div>
@@ -1854,24 +1914,35 @@ async def handle_http_client(
         localStorage.setItem(themeKey, next);
       }});
 
-      const matrixBodyEl = document.getElementById('matrixBody');
+      const homeOverviewCardEl = document.getElementById('homeOverviewCard');
+      const devicesBodyEl = document.getElementById('devicesBody');
       const logsPreEl = document.getElementById('logsPre');
       const unknownCtlPreEl = document.getElementById('unknownCtlPre');
       let refreshInFlight = false;
+      function shouldAutoRefresh() {{
+        const p = window.location.pathname || '/';
+        if (p === '/controls' || p === '/matrix') return false;
+        return true;
+      }}
       async function refreshLiveSections() {{
         if (dtBusy || refreshInFlight || document.hidden) return;
+        if (!shouldAutoRefresh()) return;
         refreshInFlight = true;
         try {{
           const r = await fetch(window.location.pathname + window.location.search, {{ cache: 'no-store' }});
           if (!r.ok) return;
           const t = await r.text();
           const doc = new DOMParser().parseFromString(t, 'text/html');
-          const newMatrixBody = doc.getElementById('matrixBody');
+          const newHomeCard = doc.getElementById('homeOverviewCard');
+          if (homeOverviewCardEl && newHomeCard) {{
+            homeOverviewCardEl.innerHTML = newHomeCard.innerHTML;
+          }}
+          const newDevicesBody = doc.getElementById('devicesBody');
           const newLogsPre = doc.getElementById('logsPre');
           const newUnknownPre = doc.getElementById('unknownCtlPre');
-          if (matrixBodyEl && newMatrixBody) {{
-            matrixBodyEl.innerHTML = newMatrixBody.innerHTML;
-            bindEndpointSkipButtons(matrixBodyEl);
+          if (devicesBodyEl && newDevicesBody) {{
+            devicesBodyEl.innerHTML = newDevicesBody.innerHTML;
+            bindEndpointSkipButtons(devicesBodyEl);
           }}
           if (logsPreEl && newLogsPre) logsPreEl.textContent = newLogsPre.textContent || '';
           if (unknownCtlPreEl && newUnknownPre) unknownCtlPreEl.textContent = newUnknownPre.textContent || '';
