@@ -23,3 +23,6 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Local scratch files, captures, and notes (not committed)
+untracked/
+
