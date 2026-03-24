@@ -4185,7 +4185,70 @@ async def handle_client(
         """
         Read one controller command line, accepting CRLF, LF, or CR delimiters.
         Some RTI driver flows may emit CR-only lines during reinitialize.
+        Also strip/respond to Telnet negotiation bytes (IAC sequences).
         """
+        IAC = 255
+        DONT = 254
+        DO = 253
+        WONT = 252
+        WILL = 251
+        SB = 250
+        SE = 240
+
+        async def _telnet_filter_and_respond(data: bytes) -> bytes:
+            out = bytearray()
+            i = 0
+            while i < len(data):
+                b = data[i]
+                if b != IAC:
+                    out.append(b)
+                    i += 1
+                    continue
+
+                # IAC at end of chunk: drop and continue.
+                if i + 1 >= len(data):
+                    break
+                cmd = data[i + 1]
+
+                # Escaped IAC (0xFF 0xFF) within text stream.
+                if cmd == IAC:
+                    out.append(IAC)
+                    i += 2
+                    continue
+
+                # Subnegotiation: IAC SB ... IAC SE
+                if cmd == SB:
+                    j = i + 2
+                    while j + 1 < len(data):
+                        if data[j] == IAC and data[j + 1] == SE:
+                            j += 2
+                            break
+                        j += 1
+                    i = j
+                    continue
+
+                # Option negotiation: respond negatively to keep raw line protocol.
+                if cmd in (DO, DONT, WILL, WONT):
+                    if i + 2 < len(data):
+                        opt = data[i + 2]
+                        if cmd in (DO, DONT):
+                            # Peer asks us to DO/DON'T -> we reply WONT.
+                            writer.write(bytes([IAC, WONT, opt]))
+                        else:
+                            # Peer says WILL/WON'T -> we reply DONT.
+                            writer.write(bytes([IAC, DONT, opt]))
+                        with contextlib.suppress(Exception):
+                            await writer.drain()
+                        i += 3
+                        continue
+                    # Incomplete negotiation bytes at end of chunk.
+                    break
+
+                # Other 2-byte telnet command; ignore.
+                i += 2
+
+            return bytes(out)
+
         if not hasattr(_read_protocol_line, "_buf"):
             setattr(_read_protocol_line, "_buf", bytearray())
         buf: bytearray = getattr(_read_protocol_line, "_buf")
@@ -4210,7 +4273,9 @@ async def handle_client(
                     line = raw.decode("utf-8", errors="replace").strip()
                     return line or None
                 return None
-            buf.extend(chunk)
+            app_bytes = await _telnet_filter_and_respond(chunk)
+            if app_bytes:
+                buf.extend(app_bytes)
 
     try:
         while True:
