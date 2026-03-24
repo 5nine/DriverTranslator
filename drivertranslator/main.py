@@ -18,7 +18,7 @@ import time
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 # Quick index (major sections in this file):
@@ -472,6 +472,8 @@ class Config:
     tx_by_hostname: Dict[str, Tx]
     rx_by_alias: Dict[str, Rx]
     rx_by_hostname: Dict[str, Rx]
+    tx_skipped_aliases: Set[str]
+    rx_skipped_aliases: Set[str]
     amx_decoder_port: int
     amx_connect_timeout_ms: int
     amx_command_timeout_ms: int
@@ -547,10 +549,11 @@ def load_config(path: str) -> Config:
     rx_list = endpoints.get("rx", [])
 
     txs: List[Tx] = []
+    tx_skipped_aliases: Set[str] = set()
     for t in tx_list:
-        if _as_bool(t.get("skip"), default=False):
-            continue
         alias = str(t["alias"])
+        if _as_bool(t.get("skip"), default=False):
+            tx_skipped_aliases.add(alias)
         hostname = str(t.get("hostname") or f"NHD-TX-{alias}")
         ip = t.get("ip")
         ip_s = str(ip) if ip is not None else None
@@ -558,10 +561,11 @@ def load_config(path: str) -> Config:
         txs.append(Tx(alias=alias, hostname=hostname, ip=ip_s, amx_stream=amx_stream))
 
     rxs: List[Rx] = []
+    rx_skipped_aliases: Set[str] = set()
     for r in rx_list:
-        if _as_bool(r.get("skip"), default=False):
-            continue
         alias = str(r["alias"])
+        if _as_bool(r.get("skip"), default=False):
+            rx_skipped_aliases.add(alias)
         hostname = str(r.get("hostname") or f"NHD-RX-{alias}")
         ip = r.get("ip")
         ip_s = str(ip) if ip is not None else None
@@ -596,6 +600,8 @@ def load_config(path: str) -> Config:
         tx_by_hostname=tx_by_hostname,
         rx_by_alias=rx_by_alias,
         rx_by_hostname=rx_by_hostname,
+        tx_skipped_aliases=tx_skipped_aliases,
+        rx_skipped_aliases=rx_skipped_aliases,
         amx_decoder_port=_as_int(amx.get("decoder_port"), default=50002),
         amx_connect_timeout_ms=_as_int(amx.get("connect_timeout_ms"), default=1000),
         amx_command_timeout_ms=_as_int(amx.get("command_timeout_ms"), default=1500),
@@ -973,14 +979,15 @@ async def _amx_self_test(*, cfg: Config, amx: Any) -> Dict[str, Any]:
     Connectivity self-test: attempt to connect to each configured decoder IP.
     Returns a summary suitable for web UI and/or problem notification.
     """
+    active_rx = [rx for rx in cfg.rx_by_alias.values() if rx.alias not in cfg.rx_skipped_aliases]
     if cfg.amx_dry_run:
-        return {"ok": len(cfg.rx_by_alias), "total": len(cfg.rx_by_alias), "unreachable": []}
+        return {"ok": len(active_rx), "total": len(active_rx), "unreachable": []}
 
     ok = 0
     unreachable: List[str] = []
     local_addr = (cfg.amx_bind_address, 0) if cfg.amx_bind_address else None
 
-    for rx in cfg.rx_by_alias.values():
+    for rx in active_rx:
         ip = rx.amx_decoder_ip
         try:
             _r, w = await _open_connection(
@@ -996,7 +1003,7 @@ async def _amx_self_test(*, cfg: Config, amx: Any) -> Dict[str, Any]:
         except Exception:
             unreachable.append(ip)
 
-    return {"ok": ok, "total": len(cfg.rx_by_alias), "unreachable": unreachable}
+    return {"ok": ok, "total": len(active_rx), "unreachable": unreachable}
 
 
 def _http_response(status: str, content_type: str, body: bytes) -> bytes:
@@ -1687,11 +1694,11 @@ async def _handle_http_client(
             rx_start_ip = cfg.rx_by_alias[rx_aliases[0]].ip if rx_aliases else ""
             endpoint_inventory = _load_endpoint_inventory(config_path=config_path)
             tx_skip_by_alias = {
-                str(row.get("alias", "")): bool(row.get("skip", False))
+                str(row.get("alias", "")): _as_bool(row.get("skip"), default=False)
                 for row in endpoint_inventory.get("tx", [])
             }
             rx_skip_by_alias = {
-                str(row.get("alias", "")): bool(row.get("skip", False))
+                str(row.get("alias", "")): _as_bool(row.get("skip"), default=False)
                 for row in endpoint_inventory.get("rx", [])
             }
             route_rows = []
@@ -1712,10 +1719,12 @@ async def _handle_http_client(
                     f"{'Unskip' if tx_is_skip else 'Skip'}</button>"
                 )
                 tx = cfg.tx_by_alias.get(tx_alias)
-                if tx is None:
+                if tx_is_skip:
                     route_rows.append(
                         f"<tr><td><code>{html.escape(tx_alias)}</code></td><td><code>-</code></td><td class=\"bad\"><b>SKIPPED</b></td><td><b>-</b></td><td>{tx_skip_btn}</td></tr>"
                     )
+                    continue
+                if tx is None:
                     continue
                 tx_fields = state.tx_status_fields.get(tx_alias) or {}
                 polled_stream = (tx_fields.get("STREAM") or "").strip()
@@ -1735,10 +1744,12 @@ async def _handle_http_client(
                     f"data-kind=\"rx\" data-alias=\"{html.escape(rx_alias)}\" data-skip=\"{rx_next_skip}\">"
                     f"{'Unskip' if rx_is_skip else 'Skip'}</button>"
                 )
-                if rx_alias not in cfg.rx_by_alias:
+                if rx_is_skip:
                     route_rows.append(
                         f"<tr><td><code>{html.escape(rx_alias)}</code></td><td><code>NULL</code></td><td class=\"bad\"><b>SKIPPED</b></td><td><b>-</b></td><td>{rx_skip_btn}</td></tr>"
                     )
+                    continue
+                if rx_alias not in cfg.rx_by_alias:
                     continue
                 tx_alias = state.video.get(rx_alias) or "NULL"
                 online = state.rx_online.get(rx_alias, True)
@@ -4097,7 +4108,10 @@ async def _handle_matrix_set(
 async def _refresh_hdmi_outputs(*, cfg: Config, amx: Any, state: ControllerState, timeout_ms: int) -> None:
     if not hasattr(amx, "get_hdmi_output"):
         return
-    rx_aliases = sorted(cfg.rx_by_alias.keys(), key=_rx_alias_sort_key)
+    rx_aliases = sorted(
+        [a for a in cfg.rx_by_alias.keys() if a not in cfg.rx_skipped_aliases],
+        key=_rx_alias_sort_key,
+    )
     if not rx_aliases:
         return
     results = await asyncio.gather(
@@ -4128,7 +4142,7 @@ async def _refresh_hdmi_outputs_for_aliases(
 ) -> None:
     if not hasattr(amx, "get_hdmi_output"):
         return
-    wanted = [a for a in rx_aliases if a in cfg.rx_by_alias]
+    wanted = [a for a in rx_aliases if a in cfg.rx_by_alias and a not in cfg.rx_skipped_aliases]
     if not wanted:
         return
     results = await asyncio.gather(
@@ -4180,7 +4194,10 @@ async def _read_amx_status_fields_from_ip(
 
 
 async def _refresh_tx_statuses(*, cfg: Config, state: ControllerState, runtime: RuntimeSettings) -> None:
-    tx_aliases = sorted(cfg.tx_by_alias.keys(), key=_tx_alias_sort_key)
+    tx_aliases = sorted(
+        [a for a in cfg.tx_by_alias.keys() if a not in cfg.tx_skipped_aliases],
+        key=_tx_alias_sort_key,
+    )
     if not tx_aliases:
         return
 
@@ -4270,7 +4287,8 @@ async def _apply_amx_command_to_rx_aliases(
     command: str,
     timeout_ms: int,
 ) -> Tuple[List[Tuple[str, str, str]], Dict[str, Dict[str, str]]]:
-    if not rx_aliases:
+    rx_aliases_active = [a for a in rx_aliases if a in cfg.rx_by_alias and a not in cfg.rx_skipped_aliases]
+    if not rx_aliases_active:
         return [], {}
     failures: List[Tuple[str, str, str]] = []
     status_by_rx: Dict[str, Dict[str, str]] = {}
@@ -4282,11 +4300,11 @@ async def _apply_amx_command_to_rx_aliases(
                     command=command,
                     timeout_ms=timeout_ms,
                 )
-                for a in rx_aliases
+                for a in rx_aliases_active
             ),
             return_exceptions=True,
         )
-        for a, res in zip(rx_aliases, results):
+        for a, res in zip(rx_aliases_active, results):
             if isinstance(res, BaseException):
                 failures.append((a, cfg.rx_by_alias[a].amx_decoder_ip, str(res)))
                 state.set_rx_online(a, False)
@@ -4305,11 +4323,11 @@ async def _apply_amx_command_to_rx_aliases(
                     decoder_ip=cfg.rx_by_alias[a].amx_decoder_ip,
                     command=command,
                 )
-                for a in rx_aliases
+                for a in rx_aliases_active
             ),
             return_exceptions=True,
         )
-        for a, res in zip(rx_aliases, results):
+        for a, res in zip(rx_aliases_active, results):
             if isinstance(res, BaseException):
                 failures.append((a, cfg.rx_by_alias[a].amx_decoder_ip, str(res)))
                 state.set_rx_online(a, False)
@@ -4879,6 +4897,8 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
                 break
         if tx_stream1_alias is not None:
             for rx in cfg.rx_by_alias.values():
+                if rx.alias in cfg.rx_skipped_aliases:
+                    continue
                 state.set_rx_all_media(rx_alias=rx.alias, tx_alias=tx_stream1_alias)
                 state.set_rx_hdmi_output(rx.alias, True)
             LOG.info(
@@ -4890,11 +4910,15 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
     if cfg.amx_dry_run and cfg.amx_dry_run_offline_decoders:
         offline = {x.strip() for x in cfg.amx_dry_run_offline_decoders if str(x).strip()}
         for rx in cfg.rx_by_alias.values():
+            if rx.alias in cfg.rx_skipped_aliases:
+                continue
             if rx.amx_decoder_ip in offline:
                 state.set_rx_online(rx.alias, False)
     elif not cfg.amx_dry_run:
         # In live mode, avoid optimistic "connected" until we have evidence.
         for rx in cfg.rx_by_alias.values():
+            if rx.alias in cfg.rx_skipped_aliases:
+                continue
             state.set_rx_online(rx.alias, False)
     health = HealthState()
     runtime = RuntimeSettings(cfg)
@@ -4919,6 +4943,8 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
             unreachable = {str(x).strip() for x in (res.get("unreachable") or [])}
             # Reflect startup connectivity on the status page.
             for rx in cfg.rx_by_alias.values():
+                if rx.alias in cfg.rx_skipped_aliases:
+                    continue
                 state.set_rx_online(rx.alias, rx.amx_decoder_ip not in unreachable)
             fail = res.get("unreachable") or []
             if fail:
@@ -4934,13 +4960,17 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
             # Also prime TX status on startup so the status page has immediate TX visibility.
             await _refresh_tx_statuses(cfg=cfg, state=state, runtime=runtime)
             offline_txs = sorted(
-                [tx_alias for tx_alias in cfg.tx_by_alias.keys() if not state.tx_online.get(tx_alias, False)],
+                [
+                    tx_alias
+                    for tx_alias in cfg.tx_by_alias.keys()
+                    if tx_alias not in cfg.tx_skipped_aliases and not state.tx_online.get(tx_alias, False)
+                ],
                 key=_tx_alias_sort_key,
             )
             if offline_txs:
                 await notifier.problem(
                     "amx.txstatus.startup",
-                    f"DT: ERROR AMX TX startup status poll: {len(offline_txs)}/{len(cfg.tx_by_alias)} offline. "
+                    f"DT: ERROR AMX TX startup status poll: {len(offline_txs)}/{max(1, len(cfg.tx_by_alias) - len(cfg.tx_skipped_aliases))} offline. "
                     + ", ".join(offline_txs[:5])
                     + (" ..." if len(offline_txs) > 5 else ""),
                 )
