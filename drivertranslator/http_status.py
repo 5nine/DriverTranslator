@@ -106,7 +106,8 @@ async def handle_http_client(
         rt = await runtime.snapshot()
         _ = await problems.snapshot()
 
-        if path in ("/status", "/status.json"):
+        # JSON snapshot API — /status is reserved for the Status HTML tab (see below).
+        if path_only == "/status.json":
             body = (json.dumps(snapshot, indent=2) + "\n").encode("utf-8")
             writer.write(http_response("200 OK", "application/json", body))
             return
@@ -847,26 +848,38 @@ async def handle_http_client(
     a {{ color: var(--link); text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
 
-    .topbar {{
+    .dt-menubar {{
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      margin-bottom: 24px;
+    }}
+    .dt-menubar-inner {{
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 12px 20px;
       display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 16px;
-      margin-bottom: 28px;
       flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px 20px;
     }}
-    .brand {{
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }}
-    .brand h1 {{
-      margin: 0;
-      font-size: 1.45rem;
+    .dt-menubar-brand {{
+      font-size: 1.35rem;
       font-weight: 700;
       letter-spacing: -0.02em;
+      color: var(--fg);
+      text-decoration: none;
+      white-space: nowrap;
     }}
-    .brand span {{ font-size: 0.8rem; color: var(--muted); }}
+    .dt-menubar-brand:hover {{ color: var(--link); text-decoration: none; }}
+    .dt-footer {{
+      margin-top: 36px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+    }}
 
     .btn {{
       border: 1px solid var(--border);
@@ -1111,47 +1124,56 @@ async def handle_http_client(
     @keyframes av-spin {{ to {{ transform: rotate(360deg); }} }}
 
     .dt-nav {{
-      border-top: 1px solid var(--border);
-      padding-top: 14px;
-      margin: 0 0 22px 0;
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      gap: 6px 20px;
+      justify-content: flex-end;
+      gap: 4px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      flex: 1;
+      min-width: 0;
     }}
     .dt-nav-link {{
+      display: inline-block;
       font-weight: 600;
-      font-size: 0.95rem;
+      font-size: 0.9rem;
       color: var(--muted);
       text-decoration: none;
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid transparent;
     }}
-    .dt-nav-link:hover {{ color: var(--link); }}
+    .dt-nav-link:hover {{
+      color: var(--link);
+      background: var(--row);
+      text-decoration: none;
+    }}
     .dt-nav-link.dt-nav-active {{
       color: var(--link);
-      text-decoration: underline;
-      text-underline-offset: 4px;
+      background: var(--accent-soft);
+      border-color: var(--border);
+      text-decoration: none;
     }}
     .dt-page[hidden] {{ display: none !important; }}
     .dt-page > .section-title:first-child {{ margin-top: 0; }}
   </style>
 </head>
 <body>
-  <div class="wrap">
-  <div class="topbar">
-    <div class="brand">
-      <h1>DriverTranslator</h1>
-      <span>Use the links below. <b>Home</b> and <b>Status</b> auto-refresh every 5s while this tab is visible. <b>Controls</b> and <b>Matrix</b> load fresh when you open them (no background polling).</span>
+  <header class="dt-menubar">
+    <div class="dt-menubar-inner">
+      <a href="/home" class="dt-menubar-brand">DriverTranslator</a>
+      <nav class="dt-nav" aria-label="Main">
+        <a href="/home" class="dt-nav-link{_nav_active('home')}">Home</a>
+        <a href="/controls" class="dt-nav-link{_nav_active('controls')}">Controls</a>
+        <a href="/status" class="dt-nav-link{_nav_active('status')}">Status</a>
+        <a href="/matrix" class="dt-nav-link{_nav_active('matrix')}">Matrix</a>
+      </nav>
     </div>
-    <button class="btn" id="themeBtn" type="button">Theme</button>
-  </div>
+  </header>
 
-  <nav class="dt-nav" aria-label="Main">
-    <a href="/home" class="dt-nav-link{_nav_active('home')}">Home</a>
-    <a href="/controls" class="dt-nav-link{_nav_active('controls')}">Controls</a>
-    <a href="/status" class="dt-nav-link{_nav_active('status')}">Status</a>
-    <a href="/matrix" class="dt-nav-link{_nav_active('matrix')}">Matrix</a>
-  </nav>
-
+  <div class="wrap">
   <section id="page-home" class="dt-page"{_page_hidden('home')}>
   <div class="section-title">Overview</div>
   <div class="card" id="homeOverviewCard">
@@ -1330,6 +1352,10 @@ async def handle_http_client(
         </div>
       </div>
     </div>
+  </div>
+
+  <div class="dt-footer">
+    <button class="btn" id="themeBtn" type="button">Theme</button>
   </div>
   </div>
   <script>
