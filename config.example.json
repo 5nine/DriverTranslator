@@ -46,23 +46,6 @@
   "server": {
     "expanded_log": false
   },
-  "rti_notify": {
-    "enabled": false,
-    "protocol": "tcp",
-    "host": "192.168.1.50",
-    "port": 30001,
-    "bind_address": null,
-    "min_interval_seconds": 10,
-    "repeat_suppression_seconds": 300
-  },
-  "rti_status": {
-    "enabled": false,
-    "protocol": "tcp",
-    "host": "192.168.1.50",
-    "port": 30002,
-    "bind_address": null,
-    "interval_seconds": 30
-  },
   "http_status": {
     "enabled": true,
     "bind": "0.0.0.0",

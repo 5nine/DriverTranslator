@@ -186,30 +186,6 @@ if [[ "$DO_CONFIG" -eq 1 ]]; then
     read -r -p "HTTP webpage password (Basic auth) (default 1234): " HTTP_PW
     HTTP_PW="${HTTP_PW:-1234}"
 
-    read -r -p "Enable RTI problems-only notify (Two Way Strings)? (y/N): " RTI_PROB
-    RTI_PROB="${RTI_PROB:-N}"
-    if [[ "$RTI_PROB" =~ ^[Yy]$ ]]; then
-      read -r -p "  RTI notify host/IP: " RTI_PROB_HOST
-      read -r -p "  RTI notify port (default 30001): " RTI_PROB_PORT
-      RTI_PROB_PORT="${RTI_PROB_PORT:-30001}"
-    else
-      RTI_PROB_HOST=""
-      RTI_PROB_PORT="0"
-    fi
-
-    read -r -p "Enable RTI status heartbeat (optional)? (y/N): " RTI_STAT
-    RTI_STAT="${RTI_STAT:-N}"
-    if [[ "$RTI_STAT" =~ ^[Yy]$ ]]; then
-      read -r -p "  RTI status host/IP: " RTI_STAT_HOST
-      read -r -p "  RTI status port (default 30002): " RTI_STAT_PORT
-      RTI_STAT_PORT="${RTI_STAT_PORT:-30002}"
-      read -r -p "  RTI status interval seconds (default 30): " RTI_STAT_INT
-      RTI_STAT_INT="${RTI_STAT_INT:-30}"
-    else
-      RTI_STAT_HOST=""
-      RTI_STAT_PORT="0"
-      RTI_STAT_INT="30"
-    fi
 
     # Which NIC/IP should AMX connections bind to? Prefer the AVoIP NIC IP if provided.
     AMX_BIND_IP=""
@@ -252,13 +228,6 @@ http_enabled = "${HTTP_EN}".strip().lower() not in ("n","no","false","0","off")
 http_bind = "${HTTP_BIND}".strip() or "0.0.0.0"
 http_port = int("${HTTP_PORT}")
 http_log_lines = int("${HTTP_LOGLINES}")
-rti_prob_enabled = "${RTI_PROB}".strip().lower() in ("y","yes","true","1","on")
-rti_prob_host = "${RTI_PROB_HOST}".strip() or None
-rti_prob_port = int("${RTI_PROB_PORT}")
-rti_stat_enabled = "${RTI_STAT}".strip().lower() in ("y","yes","true","1","on")
-rti_stat_host = "${RTI_STAT_HOST}".strip() or None
-rti_stat_port = int("${RTI_STAT_PORT}")
-rti_stat_int = int("${RTI_STAT_INT}")
 http_pw = "${HTTP_PW}".strip() or "1234"
 
 tx = []
@@ -307,8 +276,6 @@ cfg = {
     "set_retry_backoff_max_ms": 1200
   },
   "server": { "expanded_log": False },
-  "rti_notify": { "enabled": rti_prob_enabled, "protocol": "tcp", "host": rti_prob_host, "port": rti_prob_port, "bind_address": None, "min_interval_seconds": 10, "repeat_suppression_seconds": 300 },
-  "rti_status": { "enabled": rti_stat_enabled, "protocol": "tcp", "host": rti_stat_host, "port": rti_stat_port, "bind_address": None, "interval_seconds": rti_stat_int },
   "http_status": { "enabled": http_enabled, "bind": http_bind, "port": http_port, "log_lines": http_log_lines, "control_token": None, "password": http_pw },
   "rti_control": { "enabled": False, "bind_address": None, "port": 0, "reboot_command": "DT REBOOT" }
 }

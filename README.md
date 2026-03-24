@@ -116,122 +116,13 @@ Point the RTI WyreStorm NetworkHD “controller” connection to the DriverTrans
 - **IP**: DriverTranslator host (control NIC)
 - **Port**: `2323` (TCP)
 
-### Two Way Strings v2.7 (recommended)
+### Two Way Strings v2.7
 
-Use RTI’s **Two Way Strings** driver for:
+`rti_notify` and `rti_status` telemetry were removed. Use the built-in HTTP status page for system health, logs, and controls.
 
-- Receiving **problems-only** notifications (`rti_notify`) via UDP
-- (Optional) Receiving **heartbeat status** (`rti_status`) via UDP
-- Sending the **UDP reboot** command (`rti_control`) to the DriverTranslator host
-
-#### Quick setup checklist (copy/paste friendly)
-
-For a single RX channel carrying both status + errors:
-
-- **Connection Type**: `UDP Connection`
-- **Network Address**: RTI/XP IP used by this driver instance
-- **Network Port**: `30001`
-- **PING Time**: `0`
-- **Enable Stop Char**: on
-- **Stop Char**: `%0a`
-- **Enable Start Byte**: off
-- **RX String 1 Name**: `DTSTATUS`
-- **RX String 1**: `DTSTATUS:$$*$$`
-- **RX String 2 Name**: `DTERROR`
-- **RX String 2**: `DT: ERROR$$*$$`
-- Optional **RX String 3 Name**: `DTERROR_AMX`
-- Optional **RX String 3**: `DT: ERROR AMX$$*$$`
-
-Details and config examples are in the sections below.
-
-Notes from the Two Way Strings docs that matter here:
-
-- **UDP mode is connectionless** (one-way send/receive)
-- The wildcard sequence **`$$*$$`** can be used in RX strings to match variable content
-- Multiple RX strings can match the same received line (one message can trigger multiple events/variables)
-- For line-oriented messages, enable framing stop char **`%0A`** (LF)
-
-#### Recommended single-channel profile (status + errors on one UDP listener)
-
-You can keep `rti_notify` and `rti_status` on the same RTI UDP port, then match by RX strings.
-
-Example `config.json`:
-
-```json
-{
-  "rti_notify": {
-    "enabled": true,
-    "protocol": "udp",
-    "host": "192.168.1.50",
-    "port": 30001,
-    "bind_address": null,
-    "min_interval_seconds": 10,
-    "repeat_suppression_seconds": 300
-  },
-  "rti_status": {
-    "enabled": true,
-    "protocol": "udp",
-    "host": "192.168.1.50",
-    "port": 30001,
-    "bind_address": null,
-    "interval_seconds": 30
-  }
-}
-```
-
-In current DriverTranslator, when `rti_notify` and `rti_status` have identical `protocol` + `host` + `port` + `bind_address`, status and error lines share the same notifier transport/socket path.
-
-#### Problems-only notifications (`rti_notify`) (RX into RTI)
-
-`rti_notify` is for **errors/problems only** (rate limited + deduped so RTI won’t get spammed).
-
-- Configure a Two Way Strings driver instance as **Network (UDP)**.
-- Set the driver **Local Port** to match `rti_notify.port`.
-- Add RX strings that match the messages DriverTranslator sends, for example:
-  - `DT: ERROR$$*$$` (catches all errors)
-  - `DT: ERROR AMX$$*$$` (only AMX-related errors)
-
-Example `config.json`:
-
-```json
-{
-  "rti_notify": {
-    "enabled": true,
-    "protocol": "udp",
-    "host": "192.168.1.50",
-    "port": 30001,
-    "min_interval_seconds": 10,
-    "repeat_suppression_seconds": 300
-  }
-}
-```
-
-#### Periodic status / heartbeat (`rti_status`, optional) (RX into RTI)
-
-If you want a separate, periodic status line (not errors), enable `rti_status`.
-You can use a different UDP port, or reuse the same one as `rti_notify` and filter by string in Two Way Strings.
-
-Example `config.json`:
-
-```json
-{
-  "rti_status": {
-    "enabled": true,
-    "protocol": "udp",
-    "host": "192.168.1.50",
-    "port": 30002,
-    "interval_seconds": 30
-  }
-}
-```
-
-Message format:
-
-`DTSTATUS: mode=persistent rti_clients=1 amx_connected=12/40 tx_total=10 rx_total=40`
-
-Suggested RX string for the Two Way Strings driver:
-
-- `DTSTATUS:$$*$$`
+- Status page: `http://<control-nic-ip>:8080/`
+- JSON status: `http://<control-nic-ip>:8080/status.json`
+- JSON logs: `http://<control-nic-ip>:8080/logs.json`
 
 #### Optional UDP control (reboot) (TX from RTI)
 
@@ -308,7 +199,7 @@ python3 -m drivertranslator --config ./config.emulator.json --listen 0.0.0.0 --p
 
 ### Emulator fault injection (simulate offline RX)
 
-In emulator mode you can force specific decoders to “act offline” so you can test `rti_notify` error reporting:
+In emulator mode you can force specific decoders to “act offline” so you can test local error logging and status behavior:
 
 - **Config**: `amx.dry_run_offline_decoders` (list of decoder IPs)
 - Example (mark RX14 offline in the default emulator IP scheme): `["192.168.10.114"]`

@@ -139,7 +139,6 @@ def _persist_runtime_setting_to_config(*, config_path: str, key: str, value: Any
         "amx_persistent": ("amx", "persistent"),
         "amx_verify_after_set": ("amx", "verify_after_set"),
         "amx_verify_timeout_ms": ("amx", "verify_timeout_ms"),
-        "rti_status_enabled": ("rti_status", "enabled"),
         "expanded_log": ("server", "expanded_log"),
     }
     target = mapping.get(key)
@@ -490,19 +489,6 @@ class Config:
     amx_set_retry_attempts: int
     amx_set_retry_backoff_initial_ms: int
     amx_set_retry_backoff_max_ms: int
-    rti_notify_enabled: bool
-    rti_notify_protocol: str
-    rti_notify_host: Optional[str]
-    rti_notify_port: int
-    rti_notify_bind_address: Optional[str]
-    rti_notify_min_interval_seconds: int
-    rti_notify_repeat_suppression_seconds: int
-    rti_status_enabled: bool
-    rti_status_protocol: str
-    rti_status_host: Optional[str]
-    rti_status_port: int
-    rti_status_bind_address: Optional[str]
-    rti_status_interval_seconds: int
     http_status_enabled: bool
     http_status_bind: str
     http_status_port: int
@@ -574,8 +560,6 @@ def load_config(path: str) -> Config:
 
     amx = raw.get("amx", {})
     server = raw.get("server", {})
-    rti_notify = raw.get("rti_notify", {})
-    rti_status = raw.get("rti_status", {})
     http_status = raw.get("http_status", {})
     rti_control = raw.get("rti_control", {})
     unknown_ctl = raw.get("unknown_ctl") if isinstance(raw.get("unknown_ctl"), dict) else {}
@@ -618,21 +602,6 @@ def load_config(path: str) -> Config:
         amx_set_retry_attempts=_clamp_int(amx.get("set_retry_attempts"), default=3, min_v=1, max_v=10),
         amx_set_retry_backoff_initial_ms=_clamp_int(amx.get("set_retry_backoff_initial_ms"), default=200, min_v=0, max_v=5000),
         amx_set_retry_backoff_max_ms=_clamp_int(amx.get("set_retry_backoff_max_ms"), default=1200, min_v=0, max_v=10000),
-        rti_notify_enabled=_as_bool(rti_notify.get("enabled"), default=False),
-        rti_notify_protocol=str(rti_notify.get("protocol", "udp")).strip().lower(),
-        rti_notify_host=_bind_addr(rti_notify.get("host")),
-        rti_notify_port=_as_int(rti_notify.get("port"), default=0),
-        rti_notify_bind_address=_bind_addr(rti_notify.get("bind_address")),
-        rti_notify_min_interval_seconds=_as_int(rti_notify.get("min_interval_seconds"), default=10),
-        rti_notify_repeat_suppression_seconds=_as_int(
-            rti_notify.get("repeat_suppression_seconds"), default=300
-        ),
-        rti_status_enabled=_as_bool(rti_status.get("enabled"), default=False),
-        rti_status_protocol=str(rti_status.get("protocol", "udp")).strip().lower(),
-        rti_status_host=_bind_addr(rti_status.get("host")),
-        rti_status_port=_as_int(rti_status.get("port"), default=0),
-        rti_status_bind_address=_bind_addr(rti_status.get("bind_address")),
-        rti_status_interval_seconds=_as_int(rti_status.get("interval_seconds"), default=30),
         http_status_enabled=_as_bool(http_status.get("enabled"), default=True),
         http_status_bind=str(http_status.get("bind", "0.0.0.0")).strip() or "0.0.0.0",
         http_status_port=_as_int(http_status.get("port"), default=8080),
@@ -721,26 +690,13 @@ def _validate_config(cfg: Config) -> None:
         raise ValueError("Config validation failed:\n- " + "\n- ".join(errors))
 
 
-class RtiNotifier:
+class LocalProblemReporter:
     def __init__(
         self,
         *,
-        enabled: bool,
-        protocol: str,
-        host: Optional[str],
-        port: int,
-        bind_address: Optional[str] = None,
         min_interval_seconds: int = 10,
         repeat_suppression_seconds: int = 300,
     ) -> None:
-        self._enabled = enabled and bool(host) and int(port) > 0
-        self._protocol = protocol
-        self._host = host or ""
-        self._port = int(port)
-        self._bind_address = bind_address
-        self._udp_transport: Optional[asyncio.DatagramTransport] = None
-        self._udp_ready = asyncio.Event()
-        self._lock = asyncio.Lock()
         self._min_interval = max(0, int(min_interval_seconds))
         self._repeat_suppression = max(0, int(repeat_suppression_seconds))
         self._last_sent_at: Dict[str, float] = {}
@@ -750,70 +706,12 @@ class RtiNotifier:
     def attach_problem_state(self, problems: ProblemState) -> None:
         self._problems = problems
 
-    async def start(self) -> None:
-        if not self._enabled:
-            return
-        if self._protocol == "udp":
-            loop = asyncio.get_running_loop()
-            local = (self._bind_address, 0) if self._bind_address else None
-            try:
-                transport, _ = await loop.create_datagram_endpoint(
-                    lambda: asyncio.DatagramProtocol(),
-                    local_addr=local,
-                    family=socket.AF_INET,
-                )
-            except Exception as e:
-                if local is None:
-                    raise
-                LOG.warning(
-                    "RTI notifier UDP bind failed for %r (%s); retrying wildcard IPv4 bind.",
-                    self._bind_address,
-                    e,
-                )
-                transport, _ = await loop.create_datagram_endpoint(
-                    lambda: asyncio.DatagramProtocol(),
-                    local_addr=("0.0.0.0", 0),
-                    family=socket.AF_INET,
-                )
-            self._udp_transport = transport  # type: ignore[assignment]
-            self._udp_ready.set()
-
-    async def send(self, message: str) -> None:
-        if not self._enabled:
-            return
-        msg = (message.rstrip("\r\n") + "\r\n").encode("utf-8", errors="replace")
-
-        if self._protocol == "udp":
-            await self._udp_ready.wait()
-            if self._udp_transport is not None:
-                self._udp_transport.sendto(msg, (self._host, self._port))
-            return
-
-        # TCP: connect, send, close (simple + robust)
-        async with self._lock:
-            try:
-                reader, writer = await _open_connection(
-                    self._host,
-                    self._port,
-                    timeout=1.5,
-                    local_addr=(self._bind_address, 0) if self._bind_address else None,
-                )
-                writer.write(msg)
-                await writer.drain()
-                writer.close()
-                with contextlib.suppress(Exception):
-                    await writer.wait_closed()
-            except Exception:
-                LOG.debug("RTI notify send failed", exc_info=True)
-
     async def problem(self, key: str, message: str) -> None:
         """
         Problems-only notification with anti-spam:
         - per-key minimum interval
         - suppress identical messages for a longer window
         """
-        if not self._enabled:
-            return
         now = time.monotonic()
         last_at = self._last_sent_at.get(key)
         last_msg = self._last_sent_msg.get(key)
@@ -827,85 +725,10 @@ class RtiNotifier:
         self._last_sent_at[key] = now
         self._last_sent_msg[key] = msg
         # Always log locally (and on the status page log tail).
-        LOG.error("(rti_notify) %s", msg)
+        LOG.error("%s", msg)
         if self._problems is not None:
             with contextlib.suppress(Exception):
                 await self._problems.record(key=key, message=msg)
-        await self.send(msg)
-
-
-# ---------------------------------------------------------------------------
-# RTI status reporting / notification
-# ---------------------------------------------------------------------------
-class StatusReporter:
-    def __init__(
-        self,
-        *,
-        enabled: bool,
-        protocol: str,
-        host: Optional[str],
-        port: int,
-        bind_address: Optional[str],
-        interval_seconds: int,
-        health: HealthState,
-        amx: Any,
-        cfg: Config,
-        runtime: RuntimeSettings,
-        shared_notifier: Optional["RtiNotifier"] = None,
-    ) -> None:
-        self._enabled = enabled and bool(host) and int(port) > 0 and interval_seconds > 0
-        self._interval = max(1, int(interval_seconds))
-        self._health = health
-        self._amx = amx
-        self._cfg = cfg
-        self._runtime = runtime
-        self._uses_shared_notifier = shared_notifier is not None
-        self._notifier = shared_notifier or RtiNotifier(
-            enabled=self._enabled,
-            protocol=protocol,
-            host=host,
-            port=port,
-            bind_address=bind_address,
-            min_interval_seconds=0,
-            repeat_suppression_seconds=0,
-        )
-        self._task: Optional[asyncio.Task[None]] = None
-
-    async def start(self) -> None:
-        if not self._enabled:
-            return
-        if not self._uses_shared_notifier:
-            await self._notifier.start()
-        self._task = asyncio.create_task(self._loop(), name="dt-status-reporter")
-
-    async def _loop(self) -> None:
-        while True:
-            await asyncio.sleep(self._interval)
-            # Can be disabled at runtime via web controls.
-            if self._runtime.rti_status_enabled:
-                await self._send_status()
-
-    async def _send_status(self) -> None:
-        mode = "dry_run" if self._cfg.amx_dry_run else ("persistent" if self._cfg.amx_persistent else "connect_close")
-
-        amx_connected = 0
-        amx_total_known = 0
-        if hasattr(self._amx, "connection_summary"):
-            try:
-                amx_connected, amx_total_known = self._amx.connection_summary()
-            except Exception:
-                pass
-
-        # Report configured endpoints as the "system size" baseline.
-        tx_total = len(self._cfg.tx_by_alias)
-        rx_total = len(self._cfg.rx_by_alias)
-
-        msg = (
-            f"DTSTATUS: mode={mode} rti_clients={self._health.rti_clients} "
-            f"amx_connected={amx_connected}/{max(amx_total_known, rx_total)} "
-            f"tx_total={tx_total} rx_total={rx_total}"
-        )
-        await self._notifier.send(msg)
 
 
 def _parse_amx_status(data: bytes) -> Dict[str, str]:
@@ -1473,7 +1296,7 @@ async def _handle_http_client(
                         value,
                     )
                     bad_msg = (
-                        "Expected key amx_dry_run, amx_persistent, amx_verify_after_set, rti_status_enabled, or expanded_log with true/false, "
+                        "Expected key amx_dry_run, amx_persistent, amx_verify_after_set, or expanded_log with true/false, "
                         "or amx_verify_timeout_ms with a number (100-5000)."
                     )
                     if want_html:
@@ -1516,12 +1339,6 @@ async def _handle_http_client(
                             f"amx_verify_after_set is now {str(v).lower()} (post-route AMX STREAM check).",
                             "Takes effect immediately; no service restart needed.",
                         ]
-                    elif key == "rti_status_enabled":
-                        v = snap.get("rti_status_enabled")
-                        paras = [
-                            f"rti_status_enabled is now {str(v).lower()} (UDP status heartbeat).",
-                            "Takes effect immediately; no service restart needed.",
-                        ]
                     elif key == "expanded_log":
                         v = snap.get("expanded_log")
                         paras = [
@@ -1546,7 +1363,6 @@ async def _handle_http_client(
                                     "amx_persistent": snap.get("amx_persistent"),
                                     "amx_verify_after_set": snap.get("amx_verify_after_set"),
                                     "amx_verify_timeout_ms": snap.get("amx_verify_timeout_ms"),
-                                    "rti_status_enabled": snap.get("rti_status_enabled"),
                                     "expanded_log": snap.get("expanded_log"),
                                 },
                             ),
@@ -1556,7 +1372,7 @@ async def _handle_http_client(
                     body = (json.dumps(snap, indent=2) + "\n").encode("utf-8")
                     writer.write(_http_response("200 OK", "application/json", body))
                 LOG.info(
-                    "HTTP control [source=%s]: set %s=%r (dry_run=%s persistent=%s verify_after_set=%s verify_timeout_ms=%s rti_status=%s expanded_log=%s)",
+                    "HTTP control [source=%s]: set %s=%r (dry_run=%s persistent=%s verify_after_set=%s verify_timeout_ms=%s expanded_log=%s)",
                     ctl_via,
                     key,
                     snap.get(key),
@@ -1564,7 +1380,6 @@ async def _handle_http_client(
                     snap.get("amx_persistent"),
                     snap.get("amx_verify_after_set"),
                     snap.get("amx_verify_timeout_ms"),
-                    snap.get("rti_status_enabled"),
                     snap.get("expanded_log"),
                 )
                 return
@@ -2132,7 +1947,7 @@ async def _handle_http_client(
       </div>
     </div>
     <div class="row">
-      <div><b>AMX verify after switch</b><span class="help-icon" title="When ON, after each route the translator asks each affected decoder for STREAM via AMX. Mismatches send rti_notify only; RTI still gets an immediate matrix ack.">?</span></div>
+      <div><b>AMX verify after switch</b><span class="help-icon" title="When ON, after each route the translator asks each affected decoder for STREAM via AMX and logs mismatches locally. RTI still gets an immediate matrix ack.">?</span></div>
       <div class="ctrl-actions">
         <code id="st_amx_verify">{str(rt['amx_verify_after_set']).lower()}</code>
         <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="amx_verify_after_set" data-value="{'false' if rt['amx_verify_after_set'] else 'true'}">Toggle</button>
@@ -2144,13 +1959,6 @@ async def _handle_http_client(
         <code id="st_verify_ms">{rt['amx_verify_timeout_ms']} ms</code>
         <input id="verifyTo" class="btn" style="width:88px; padding:6px 8px;" type="number" min="100" max="5000" step="50" value="{rt['amx_verify_timeout_ms']}"/>
         <button id="applyVerifyTo" class="btn btn-primary ctrl-run" type="button" data-dt-ctl="verify_ms">Apply</button>
-      </div>
-    </div>
-    <div class="row">
-      <div><b>RTI status heartbeat</b><span class="help-icon" title="When ON, DriverTranslator sends periodic DTSTATUS lines to your rti_status UDP target (if enabled in config). No service restart needed.">?</span></div>
-      <div class="ctrl-actions">
-        <code id="st_rti_status">{str(rt['rti_status_enabled']).lower()}</code>
-        <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="rti_status_enabled" data-value="{'false' if rt['rti_status_enabled'] else 'true'}">Toggle</button>
       </div>
     </div>
     <div class="row">
@@ -2267,8 +2075,6 @@ async def _handle_http_client(
           return 'Verify timeout is now ' + j.amx_verify_timeout_ms + ' ms. Applies immediately; no restart.';
         if (key === 'amx_verify_after_set')
           return 'AMX verify after switch is now ' + String(j.amx_verify_after_set).toLowerCase() + '. Applies immediately.';
-        if (key === 'rti_status_enabled')
-          return 'RTI status heartbeat is now ' + String(j.rti_status_enabled).toLowerCase() + '. Applies immediately.';
         if (key === 'expanded_log')
           return 'Expanded log is now ' + String(j.expanded_log).toLowerCase() + '. Applies immediately.';
         return 'Setting updated. Applies immediately.';
@@ -2318,11 +2124,6 @@ async def _handle_http_client(
                 const el = document.getElementById('st_amx_persistent');
                 if (el) el.textContent = String(j.amx_persistent).toLowerCase();
                 btn.setAttribute('data-value', j.amx_persistent ? 'false' : 'true');
-              }}
-              if (key === 'rti_status_enabled') {{
-                const el = document.getElementById('st_rti_status');
-                if (el) el.textContent = String(j.rti_status_enabled).toLowerCase();
-                btn.setAttribute('data-value', j.rti_status_enabled ? 'false' : 'true');
               }}
               if (key === 'expanded_log') {{
                 const el = document.getElementById('st_expanded_log');
@@ -3603,7 +3404,6 @@ class RuntimeSettings:
         self.amx_verify_after_set: bool = cfg.amx_verify_after_set
         self.amx_verify_timeout_ms: int = cfg.amx_verify_timeout_ms
         self.amx_self_test_on_start: bool = cfg.amx_self_test_on_start
-        self.rti_status_enabled: bool = cfg.rti_status_enabled
         self.expanded_log: bool = cfg.expanded_log
         self.http_log_lines: int = cfg.http_status_log_lines
 
@@ -3615,7 +3415,6 @@ class RuntimeSettings:
                 "amx_verify_after_set": self.amx_verify_after_set,
                 "amx_verify_timeout_ms": self.amx_verify_timeout_ms,
                 "amx_self_test_on_start": self.amx_self_test_on_start,
-                "rti_status_enabled": self.rti_status_enabled,
                 "expanded_log": self.expanded_log,
                 "http_log_lines": self.http_log_lines,
             }
@@ -3630,8 +3429,6 @@ class RuntimeSettings:
                 self.amx_verify_after_set = value
             elif key == "amx_self_test_on_start":
                 self.amx_self_test_on_start = value
-            elif key == "rti_status_enabled":
-                self.rti_status_enabled = value
             elif key == "expanded_log":
                 self.expanded_log = value
             else:
@@ -4368,7 +4165,7 @@ async def handle_client(
     cfg: Config,
     amx: Any,
     state: ControllerState,
-    notifier: RtiNotifier,
+    notifier: LocalProblemReporter,
     health: HealthState,
     runtime: RuntimeSettings,
     reader: asyncio.StreamReader,
@@ -4888,17 +4685,11 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
     runtime = RuntimeSettings(cfg)
     problems = ProblemState()
 
-    notifier = RtiNotifier(
-        enabled=cfg.rti_notify_enabled,
-        protocol=cfg.rti_notify_protocol,
-        host=cfg.rti_notify_host,
-        port=cfg.rti_notify_port,
-        bind_address=cfg.rti_notify_bind_address,
-        min_interval_seconds=cfg.rti_notify_min_interval_seconds,
-        repeat_suppression_seconds=cfg.rti_notify_repeat_suppression_seconds,
+    notifier = LocalProblemReporter(
+        min_interval_seconds=10,
+        repeat_suppression_seconds=300,
     )
     notifier.attach_problem_state(problems)
-    await notifier.start()
 
     async def _run_startup_self_test() -> None:
         # Run in background so web/RTI listeners come up immediately.
@@ -4941,38 +4732,6 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         except Exception:
             LOG.exception("Startup AMX TX status poll failed")
 
-    shared_status_notifier: Optional[RtiNotifier] = None
-    same_notify_status_target = (
-        cfg.rti_notify_enabled
-        and cfg.rti_status_enabled
-        and cfg.rti_notify_protocol == cfg.rti_status_protocol
-        and (cfg.rti_notify_host or "") == (cfg.rti_status_host or "")
-        and int(cfg.rti_notify_port) == int(cfg.rti_status_port)
-        and (cfg.rti_notify_bind_address or "") == (cfg.rti_status_bind_address or "")
-    )
-    if same_notify_status_target:
-        shared_status_notifier = notifier
-        LOG.info(
-            "RTI status shares notifier transport with rti_notify (%s %s:%d)",
-            cfg.rti_notify_protocol.upper(),
-            cfg.rti_notify_host,
-            cfg.rti_notify_port,
-        )
-
-    status = StatusReporter(
-        enabled=cfg.rti_status_enabled,
-        protocol=cfg.rti_status_protocol,
-        host=cfg.rti_status_host,
-        port=cfg.rti_status_port,
-        bind_address=cfg.rti_status_bind_address,
-        interval_seconds=cfg.rti_status_interval_seconds,
-        health=health,
-        amx=amx,
-        cfg=cfg,
-        runtime=runtime,
-        shared_notifier=shared_status_notifier,
-    )
-    await status.start()
     tx_poller = TxStatusPoller(cfg=cfg, state=state, runtime=runtime)
     await tx_poller.start()
 
