@@ -1237,6 +1237,14 @@ async def handle_http_client(
       <div class="sf-item" style="margin-bottom:10px">
         <label for="avScanRange">IPv4 range (CIDR or start–end)</label>
         <input id="avScanRange" class="btn" style="padding:6px 8px;width:100%;box-sizing:border-box" type="text" />
+        <p class="subtle" style="margin:8px 0 0 0;font-size:12px;line-height:1.55">
+          <b>Examples</b>
+          — subnet: <code>192.168.10.0/24</code>
+          · inclusive range (both ends must be full IPv4 addresses):
+          <code>10.16.26.110-10.16.26.120</code>
+          · single host: <code>192.168.10.50</code>
+          · max 4096 addresses per scan.
+        </p>
       </div>
       <div class="ctrl-actions" style="margin-bottom:12px">
         <button type="button" class="ctrl-run" id="avScanRunBtn">Run scan</button>
@@ -1632,7 +1640,7 @@ async def handle_http_client(
           avRun.addEventListener('click', async () => {{
             const range = (avRange && avRange.value) ? avRange.value.trim() : '';
             if (!range) {{
-              showModal(false, 'Range required', 'Enter an IPv4 CIDR (e.g. 192.168.10.0/24) or start–end range.');
+              showModal(false, 'Range required', 'Enter a range (see examples under the field), e.g. 192.168.10.0/24 or 10.0.0.1-10.0.0.50 with full IPv4 on both sides.');
               return;
             }}
             if (!confirm(
