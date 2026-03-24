@@ -877,6 +877,35 @@ async def handle_http_client(
                     "<b>Not persisted</b> (<code>unknown_ctl.enabled</code> is false in config); "
                     "restart clears this list. Set <code>unknown_ctl.enabled</code> to true to save beside config."
                 )
+            _h_title_controls = html.escape(
+                "Control changes are saved to config and survive restart/reboot. "
+                "Each control below has its own ? with full help. Results open in a short on-page message."
+            )
+            _h_title_devices = html.escape(
+                f"TX and RX devices with routing and status. TX rows are polled from AMX getStatus every {TX_STATUS_POLL_INTERVAL_SECONDS}s. "
+                "RX rows show routed source and HDMI output (HDMIOFF: ON=enabled, OFF=disabled). "
+                "Skip toggles are saved to config and apply after restart."
+            )
+            _h_title_logs = html.escape(
+                "Tail of the service log on this host. Refreshes when this tab auto-updates (every 5s while visible)."
+            )
+            _unknown_tooltip = (
+                "Lines the WyreStorm driver sent on the RTI TCP port that returned unknown command (or similar). "
+                "Identical lines are merged; the number is how many times each was sent. Times are UTC. "
+                "Select the log below and copy for support. "
+            )
+            if _uc_path is not None:
+                _unknown_tooltip += f"When persistence is enabled, the list is stored at {str(_uc_path)}."
+            else:
+                _unknown_tooltip += (
+                    "Not persisted when unknown_ctl.enabled is false in config; restart clears the list."
+                )
+            _h_title_unknown = html.escape(_unknown_tooltip)
+            _h_title_matrix = html.escape(
+                "Click a TX cell to assign that RX (same as matrix set on the RTI port). "
+                "The None column appears only when at least one RX has no input; it shows status and cannot set NULL here (use RTI for matrix set NULL). "
+                "Skipped endpoints are disabled."
+            )
             body = f"""<!doctype html>
 <html>
 <head>
@@ -1074,6 +1103,21 @@ async def handle_http_client(
       padding-left: 10px;
     }}
     .section-title:first-of-type {{ margin-top: 0; }}
+
+    .dt-page-title-row {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin: 28px 0 10px 0;
+    }}
+    .dt-page-title-row:first-child {{ margin-top: 0; }}
+    .dt-page-title-row .section-title {{ margin: 0; }}
+    .dt-page-help {{
+      flex-shrink: 0;
+      margin-top: 1px;
+      cursor: help;
+    }}
 
     code {{
       background: var(--code-bg);
@@ -1320,7 +1364,8 @@ async def handle_http_client(
     .dt-matrix-cell.dt-matrix-none {{ cursor: default; }}
     .dt-matrix-cell.dt-matrix-busy {{ opacity: 0.55; pointer-events: none; }}
     .dt-page[hidden] {{ display: none !important; }}
-    .dt-page > .section-title:first-child {{ margin-top: 0; }}
+    .dt-page > .section-title:first-child,
+    .dt-page > .dt-page-title-row:first-child {{ margin-top: 0; }}
   </style>
 </head>
 <body>
@@ -1350,8 +1395,10 @@ async def handle_http_client(
   </section>
 
   <section id="page-controls" class="dt-page"{_page_hidden('controls')}>
-  <div class="section-title">Controls</div>
-  <p class="subtle">Control changes are saved to config and survive restart/reboot. Hover <span class="help-icon" style="cursor:default" title="Each control has a ? with full help.">?</span> for details. Results open in a short on-page message.</p>
+  <div class="dt-page-title-row">
+    <div class="section-title">Controls</div>
+    <span class="help-icon dt-page-help" title="{_h_title_controls}">?</span>
+  </div>
   <div class="card">
     <div class="row">
       <div><b>AMX dry-run mode</b><span class="help-icon" title="When ON, no AMX TCP connections are made and decoder state is simulated. Saved to config; restart required to apply.">?</span></div>
@@ -1433,8 +1480,10 @@ async def handle_http_client(
   </section>
 
   <section id="page-status" class="dt-page"{_page_hidden('status')}>
-  <div class="section-title">Devices</div>
-  <p class="subtle">TX and RX devices with routing and status. TX rows are polled from AMX <code>getStatus</code> every {TX_STATUS_POLL_INTERVAL_SECONDS}s. RX rows show routed source and HDMI output (<code>HDMIOFF</code>: <code>ON</code>=enabled, <code>OFF</code>=disabled). Skip toggles are saved to config and apply after restart.</p>
+  <div class="dt-page-title-row">
+    <div class="section-title">Devices</div>
+    <span class="help-icon dt-page-help" title="{_h_title_devices}">?</span>
+  </div>
   <div class="table-wrap">
   <table>
     <thead><tr><th>Endpoint</th><th>Route / Stream</th><th>Status</th><th>Signal</th><th>Skip</th></tr></thead>
@@ -1444,11 +1493,16 @@ async def handle_http_client(
   </table>
   </div>
 
-  <div class="section-title">Recent logs</div>
+  <div class="dt-page-title-row">
+    <div class="section-title">Recent logs</div>
+    <span class="help-icon dt-page-help" title="{_h_title_logs}">?</span>
+  </div>
   <pre id="logsPre">{log_lines}</pre>
 
-  <div class="section-title">Unrecognized RTI commands</div>
-  <p class="subtle">Lines the WyreStorm driver sent on the <b>RTI TCP port</b> (e.g. 2323) that returned <code>unknown command</code> (or similar). Identical lines are merged; the number is how many times each was sent. Times are <b>UTC</b>. Select the box below and copy for support. {_uc_persist_note}</p>
+  <div class="dt-page-title-row">
+    <div class="section-title">Unrecognized RTI commands</div>
+    <span class="help-icon dt-page-help" title="{_h_title_unknown}">?</span>
+  </div>
   <pre id="unknownCtlPre" style="max-height:320px;overflow-y:auto;font-size:11px;">{_unknown_pre}</pre>
   <div class="unk-ctl-actions">
     <button type="button" class="ctrl-run" data-dt-ctl="copy_unknown_ctl">Copy all</button>
@@ -1458,8 +1512,10 @@ async def handle_http_client(
   </section>
 
   <section id="page-matrix" class="dt-page"{_page_hidden('matrix')}>
-  <div class="section-title">Matrix</div>
-  <p class="subtle">Click a TX cell to assign that RX (same as <code>matrix set …</code> on the RTI port). The None column appears only when at least one RX has no input; it shows status and cannot set NULL here (use RTI for <code>matrix set NULL …</code>). Skipped endpoints are disabled.</p>
+  <div class="dt-page-title-row">
+    <div class="section-title">Matrix</div>
+    <span class="help-icon dt-page-help" title="{_h_title_matrix}">?</span>
+  </div>
   <div class="card" id="matrixCard">
     {matrix_table_html}
   </div>
