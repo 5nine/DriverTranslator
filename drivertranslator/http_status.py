@@ -998,7 +998,7 @@ async def handle_http_client(
       text-decoration: none;
     }}
     .dt-brand-main {{
-      font-size: 1.42rem;
+      font-size: 2.13rem;
       font-weight: 700;
       letter-spacing: -0.02em;
     }}
@@ -1009,11 +1009,11 @@ async def handle_http_client(
       margin-left: 0.06em;
     }}
     .dt-brand-sub {{
-      font-size: 0.62rem;
+      font-size: 0.93rem;
       font-weight: 500;
       letter-spacing: 0.06em;
       color: var(--muted);
-      margin-top: 1px;
+      margin-top: 2px;
     }}
     .dt-menubar-brand:hover {{ color: var(--link); text-decoration: none; }}
     .dt-menubar-brand:hover .dt-brand-sub {{ color: var(--link); }}
