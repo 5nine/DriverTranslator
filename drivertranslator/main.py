@@ -245,7 +245,8 @@ def _load_endpoint_inventory(*, config_path: str) -> Dict[str, List[Dict[str, An
             alias = str(row.get("alias", "")).strip()
             if not alias:
                 continue
-            out[kind].append({"alias": alias, "skip": bool(row.get("skip", False))})
+            # Keep skip parsing consistent with runtime config loading.
+            out[kind].append({"alias": alias, "skip": _as_bool(row.get("skip"), default=False)})
     return out
 
 
@@ -3663,11 +3664,47 @@ class _RtiControlUdp(asyncio.DatagramProtocol):
 # RTI/NHD-CTL protocol helpers and command surface
 # ---------------------------------------------------------------------------
 def _lookup_tx(cfg: Config, token: str) -> Optional[Tx]:
-    return cfg.tx_by_alias.get(token) or cfg.tx_by_hostname.get(token)
+    tok = str(token or "")
+    tok = tok.replace("\u2010", "-").replace("\u2011", "-").replace("\u2012", "-").replace("\u2013", "-").replace("\u2014", "-")
+    tok = "".join(ch for ch in tok if ch.isprintable()).strip().strip(",;:\"'()[]{}")
+    if not tok:
+        return None
+    hit = cfg.tx_by_alias.get(tok) or cfg.tx_by_hostname.get(tok)
+    if hit is not None:
+        return hit
+    tok_u = tok.upper()
+    for tx in cfg.tx_by_alias.values():
+        if tx.alias.upper() == tok_u or tx.hostname.upper() == tok_u:
+            return tx
+    m = re.match(r"^IN(\d+)$", tok_u)
+    if m:
+        n = m.group(1)
+        cands = [tx for tx in cfg.tx_by_alias.values() if re.match(rf"^IN{n}\b", tx.alias, re.IGNORECASE)]
+        if len(cands) == 1:
+            return cands[0]
+    return None
 
 
 def _lookup_rx(cfg: Config, token: str) -> Optional[Rx]:
-    return cfg.rx_by_alias.get(token) or cfg.rx_by_hostname.get(token)
+    tok = str(token or "")
+    tok = tok.replace("\u2010", "-").replace("\u2011", "-").replace("\u2012", "-").replace("\u2013", "-").replace("\u2014", "-")
+    tok = "".join(ch for ch in tok if ch.isprintable()).strip().strip(",;:\"'()[]{}")
+    if not tok:
+        return None
+    hit = cfg.rx_by_alias.get(tok) or cfg.rx_by_hostname.get(tok)
+    if hit is not None:
+        return hit
+    tok_u = tok.upper()
+    for rx in cfg.rx_by_alias.values():
+        if rx.alias.upper() == tok_u or rx.hostname.upper() == tok_u:
+            return rx
+    m = re.match(r"^OUT(\d+)$", tok_u)
+    if m:
+        n = m.group(1)
+        cands = [rx for rx in cfg.rx_by_alias.values() if re.match(rf"^OUT{n}\b", rx.alias, re.IGNORECASE)]
+        if len(cands) == 1:
+            return cands[0]
+    return None
 
 
 def _tx_alias_from_amx_stream(cfg: Config, stream_value: Optional[str]) -> Optional[str]:
