@@ -146,7 +146,7 @@ def handle_config_get(cfg: Config, session: NhdCtlSession, state: ControllerStat
     if parts[:3] == ["config", "get", "devicelist"]:
         # Doc: only online devices returned. We treat all configured devices as online.
         # Defensive: never emit padded aliases (RTI may cache learned names verbatim).
-        names = [n.strip() for n in all_endpoint_aliases(cfg)]
+        names = [n.strip(" \t\r\n\u00a0") for n in all_endpoint_aliases(cfg)]
         return ["devicelist is " + " ".join(names)]
 
     if parts[:3] == ["config", "get", "name"]:
@@ -167,12 +167,12 @@ def handle_config_get(cfg: Config, session: NhdCtlSession, state: ControllerStat
         tx = lookup_tx(cfg, token)
         if tx is not None:
             return [
-                f"{tx.hostname.strip(' \\t\\r\\n\\u00a0')}'s alias is {tx.alias.strip(' \\t\\r\\n\\u00a0')}"
+                f"{tx.hostname.strip(' \t\r\n\u00a0')}'s alias is {tx.alias.strip(' \t\r\n\u00a0')}"
             ]
         rx = lookup_rx(cfg, token)
         if rx is not None:
             return [
-                f"{rx.hostname.strip(' \\t\\r\\n\\u00a0')}'s alias is {rx.alias.strip(' \\t\\r\\n\\u00a0')}"
+                f"{rx.hostname.strip(' \t\r\n\u00a0')}'s alias is {rx.alias.strip(' \t\r\n\u00a0')}"
             ]
         return ["unknown command"]
 
