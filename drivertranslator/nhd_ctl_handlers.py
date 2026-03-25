@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict, List
 
@@ -12,6 +13,8 @@ from .protocol_helpers import (
     lookup_rx,
     lookup_tx,
 )
+
+LOG = logging.getLogger("drivertranslator")
 
 
 def handle_config_get(cfg: Config, session: NhdCtlSession, state: ControllerState, cmd: str) -> List[str]:
@@ -152,13 +155,47 @@ def handle_config_get(cfg: Config, session: NhdCtlSession, state: ControllerStat
 
     if parts[:3] == ["config", "get", "name"]:
         # `config get name` (all), or `config get name <aliasOrHostname>`
+        if cfg.expanded_log:
+            # Debug: verify in-memory values used for name responses.
+            for key in ("IN10-BOX10",):
+                txd = cfg.tx_by_alias.get(key)
+                if txd is not None:
+                    LOG.info(
+                        "DT DEBUG name: tx_by_alias[%r]=alias=%r hostname=%r",
+                        key,
+                        txd.alias,
+                        txd.hostname,
+                    )
+            for key in ("OUT10-TV10",):
+                rxd = cfg.rx_by_alias.get(key)
+                if rxd is not None:
+                    LOG.info(
+                        "DT DEBUG name: rx_by_alias[%r]=alias=%r hostname=%r",
+                        key,
+                        rxd.alias,
+                        rxd.hostname,
+                    )
         if len(parts) == 3:
             lines: List[str] = []
             for r in cfg.rx_by_alias.values():
+                if cfg.expanded_log:
+                    if r.alias.endswith("0") or r.hostname.endswith("0"):
+                        LOG.info(
+                            "DT DEBUG name: iter rx alias=%r hostname=%r",
+                            r.alias,
+                            r.hostname,
+                        )
                 lines.append(
                     f"{r.hostname.strip(' \\t\\r\\n\\u00a0')}'s alias is {r.alias.strip(' \\t\\r\\n\\u00a0')}"
                 )
             for t in cfg.tx_by_alias.values():
+                if cfg.expanded_log:
+                    if t.alias.endswith("0") or t.hostname.endswith("0"):
+                        LOG.info(
+                            "DT DEBUG name: iter tx alias=%r hostname=%r",
+                            t.alias,
+                            t.hostname,
+                        )
                 lines.append(
                     f"{t.hostname.strip(' \\t\\r\\n\\u00a0')}'s alias is {t.alias.strip(' \\t\\r\\n\\u00a0')}"
                 )
