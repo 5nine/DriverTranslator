@@ -6,11 +6,13 @@ from .models import Config, ControllerState, Rx, Tx
 
 
 def lookup_tx(cfg: Config, token: str) -> Optional[Tx]:
-    return cfg.tx_by_alias.get(token) or cfg.tx_by_hostname.get(token)
+    t = (token or "").strip()
+    return cfg.tx_by_alias.get(t) or cfg.tx_by_hostname.get(t)
 
 
 def lookup_rx(cfg: Config, token: str) -> Optional[Rx]:
-    return cfg.rx_by_alias.get(token) or cfg.rx_by_hostname.get(token)
+    t = (token or "").strip()
+    return cfg.rx_by_alias.get(t) or cfg.rx_by_hostname.get(t)
 
 
 def tx_alias_from_amx_stream(cfg: Config, stream_value: Optional[str]) -> Optional[str]:

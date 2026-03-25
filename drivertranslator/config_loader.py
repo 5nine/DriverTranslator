@@ -39,26 +39,26 @@ def load_config(path: str) -> Config:
     txs: List[Tx] = []
     tx_skipped_aliases: Set[str] = set()
     for t in tx_list:
-        alias = str(t["alias"])
+        alias = str(t["alias"]).strip()
         if as_bool(t.get("skip"), default=False):
             tx_skipped_aliases.add(alias)
-        hostname = str(t.get("hostname") or f"NHD-TX-{alias}")
+        hostname = str(t.get("hostname") or f"NHD-TX-{alias}").strip()
         ip = t.get("ip")
-        ip_s = str(ip) if ip is not None else None
+        ip_s = str(ip).strip() if ip is not None and str(ip).strip() else None
         amx_stream = as_int(t.get("amx_stream"), default=0)
         txs.append(Tx(alias=alias, hostname=hostname, ip=ip_s, amx_stream=amx_stream))
 
     rxs: List[Rx] = []
     rx_skipped_aliases: Set[str] = set()
     for r in rx_list:
-        alias = str(r["alias"])
+        alias = str(r["alias"]).strip()
         if as_bool(r.get("skip"), default=False):
             rx_skipped_aliases.add(alias)
-        hostname = str(r.get("hostname") or f"NHD-RX-{alias}")
+        hostname = str(r.get("hostname") or f"NHD-RX-{alias}").strip()
         ip = r.get("ip")
-        ip_s = str(ip) if ip is not None else None
-        ip = str(r["amx_decoder_ip"])
-        rxs.append(Rx(alias=alias, hostname=hostname, ip=ip_s, amx_decoder_ip=ip))
+        ip_s = str(ip).strip() if ip is not None and str(ip).strip() else None
+        amx_decoder_ip = str(r["amx_decoder_ip"]).strip()
+        rxs.append(Rx(alias=alias, hostname=hostname, ip=ip_s, amx_decoder_ip=amx_decoder_ip))
 
     amx = raw.get("amx", {})
     server = raw.get("server", {})
