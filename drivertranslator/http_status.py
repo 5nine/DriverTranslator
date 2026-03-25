@@ -59,7 +59,8 @@ from .utils import as_bool, rx_alias_sort_key, tx_alias_sort_key
 
 LOG = logging.getLogger("drivertranslator")
 
-_ASSET_LOGO_PATH = Path(__file__).resolve().parents[1] / "Integrion_logo.png"
+_ASSET_INTEGRION_LOGO_PATH = Path(__file__).resolve().parents[1] / "Integrion_logo.png"
+_ASSET_CONDUCTOR1_LOGO_PATH = Path(__file__).resolve().parents[1] / "Conductor1.png"
 
 
 async def handle_http_client(
@@ -99,7 +100,16 @@ async def handle_http_client(
 
         if path_only == "/assets/integrion_logo.png":
             try:
-                body = _ASSET_LOGO_PATH.read_bytes()
+                body = _ASSET_INTEGRION_LOGO_PATH.read_bytes()
+            except FileNotFoundError:
+                writer.write(http_response("404 Not Found", "text/plain", b"not found"))
+                return
+            writer.write(http_response("200 OK", "image/png", body))
+            return
+
+        if path_only == "/assets/conductor1.png":
+            try:
+                body = _ASSET_CONDUCTOR1_LOGO_PATH.read_bytes()
             except FileNotFoundError:
                 writer.write(http_response("404 Not Found", "text/plain", b"not found"))
                 return
@@ -923,7 +933,7 @@ async def handle_http_client(
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Conductor1™ by Integrion</title>
+  <title>Conductor1</title>
   <style>
     :root {{
       color-scheme: light dark;
@@ -1047,6 +1057,10 @@ async def handle_http_client(
       max-width: min(240px, 72vw);
       object-fit: contain;
     }}
+    .dt-brand-logo.dt-brand-logo-footer {{
+      height: 22px;
+      max-width: min(180px, 60vw);
+    }}
     .dt-sr-only {{
       position: absolute;
       width: 1px;
@@ -1064,7 +1078,17 @@ async def handle_http_client(
       padding-top: 20px;
       border-top: 1px solid var(--border);
       display: flex;
-      justify-content: flex-end;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      flex-wrap: wrap;
+    }}
+    .dt-powered {{
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
     }}
 
     .btn {{
@@ -1385,7 +1409,7 @@ async def handle_http_client(
   <header class="dt-menubar">
     <div class="dt-menubar-inner">
       <a href="/home" class="dt-menubar-brand" aria-label="Home">
-        <img class="dt-brand-logo" src="/assets/integrion_logo.png" alt="Integrion" />
+        <img class="dt-brand-logo" src="/assets/conductor1.png" alt="Conductor1" />
         <span class="dt-sr-only">Home</span>
       </a>
       <nav class="dt-nav" aria-label="Main">
@@ -1590,6 +1614,10 @@ async def handle_http_client(
   </div>
 
   <div class="dt-footer">
+    <div class="dt-powered">
+      <span>Powered by 'integrion_logo'</span>
+      <img class="dt-brand-logo dt-brand-logo-footer" src="/assets/integrion_logo.png" alt="Integrion" />
+    </div>
     <button class="btn" id="themeBtn" type="button">Theme</button>
   </div>
   </div>
