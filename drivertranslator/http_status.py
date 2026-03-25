@@ -1052,9 +1052,9 @@ async def handle_http_client(
     }}
     .dt-brand-logo {{
       display: block;
-      height: 34px;
+      height: 51px;
       width: auto;
-      max-width: min(240px, 72vw);
+      max-width: min(360px, 72vw);
       object-fit: contain;
     }}
     .dt-brand-logo.dt-brand-logo-footer {{
@@ -1359,11 +1359,13 @@ async def handle_http_client(
       list-style: none;
       flex: 1;
       min-width: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      letter-spacing: 0.01em;
     }}
     .dt-nav-link {{
       display: inline-block;
-      font-weight: 600;
-      font-size: 0.9rem;
+      font-weight: 550;
+      font-size: 0.92rem;
       color: var(--muted);
       text-decoration: none;
       padding: 8px 14px;
