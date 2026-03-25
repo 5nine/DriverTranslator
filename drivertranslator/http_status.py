@@ -933,6 +933,10 @@ async def handle_http_client(
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="dns-prefetch" href="//fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Karla:400,600,700%7CRubik:600,700&display=swap"/>
   <title>Conductor1</title>
   <style>
     :root {{
@@ -1008,7 +1012,7 @@ async def handle_http_client(
 
     * {{ box-sizing: border-box; }}
     body {{
-      font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+      font-family: "Karla", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
       margin: 0;
       min-height: 100vh;
       background: var(--bg);
@@ -1132,6 +1136,7 @@ async def handle_http_client(
     .section-title {{
       font-size: 0.75rem;
       font-weight: 700;
+      font-family: "Rubik", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--muted);
@@ -1359,18 +1364,19 @@ async def handle_http_client(
       list-style: none;
       flex: 1;
       min-width: 0;
-      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-      letter-spacing: 0.01em;
+      font-family: "Rubik", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      letter-spacing: 0.04em;
     }}
     .dt-nav-link {{
       display: inline-block;
-      font-weight: 550;
-      font-size: 0.92rem;
+      font-weight: 650;
+      font-size: 0.84rem;
       color: var(--muted);
       text-decoration: none;
       padding: 8px 14px;
       border-radius: 8px;
       border: 1px solid transparent;
+      text-transform: uppercase;
     }}
     .dt-nav-link:hover {{
       color: var(--link);
