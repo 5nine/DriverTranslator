@@ -5,6 +5,7 @@ import contextlib
 import html
 import json
 import logging
+from pathlib import Path
 import urllib.parse
 from typing import Any, Awaitable, Callable, Dict, List
 
@@ -58,6 +59,8 @@ from .utils import as_bool, rx_alias_sort_key, tx_alias_sort_key
 
 LOG = logging.getLogger("drivertranslator")
 
+_ASSET_LOGO_PATH = Path(__file__).resolve().parents[1] / "Integrion_logo.png"
+
 
 async def handle_http_client(
     reader: asyncio.StreamReader,
@@ -103,6 +106,15 @@ async def handle_http_client(
 
         if method != "GET":
             writer.write(http_response("405 Method Not Allowed", "text/plain", b"method not allowed"))
+            return
+
+        if path_only == "/assets/integrion_logo.png":
+            try:
+                body = _ASSET_LOGO_PATH.read_bytes()
+            except FileNotFoundError:
+                writer.write(http_response("404 Not Found", "text/plain", b"not found"))
+                return
+            writer.write(http_response("200 OK", "image/png", body))
             return
 
         snapshot = build_status_snapshot(cfg=cfg, health=health, amx=amx, started_at=started_at)
@@ -1019,33 +1031,34 @@ async def handle_http_client(
     }}
     .dt-menubar-brand {{
       display: inline-flex;
-      flex-direction: column;
-      align-items: flex-start;
+      flex-direction: row;
+      align-items: center;
       line-height: 1.12;
       font-family: Cambria, "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
       color: var(--fg);
       text-decoration: none;
+      gap: 10px;
+      min-width: 0;
     }}
-    .dt-brand-main {{
-      font-size: 2.13rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
+    .dt-brand-logo {{
+      display: block;
+      height: 34px;
+      width: auto;
+      max-width: min(240px, 72vw);
+      object-fit: contain;
     }}
-    .dt-brand-tm {{
-      font-size: 0.52em;
-      font-weight: 600;
-      vertical-align: super;
-      margin-left: 0.06em;
-    }}
-    .dt-brand-sub {{
-      font-size: 0.93rem;
-      font-weight: 500;
-      letter-spacing: 0.06em;
-      color: var(--muted);
-      margin-top: 2px;
+    .dt-sr-only {{
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
     }}
     .dt-menubar-brand:hover {{ color: var(--link); text-decoration: none; }}
-    .dt-menubar-brand:hover .dt-brand-sub {{ color: var(--link); }}
     .dt-footer {{
       margin-top: 36px;
       padding-top: 20px;
@@ -1371,7 +1384,10 @@ async def handle_http_client(
 <body>
   <header class="dt-menubar">
     <div class="dt-menubar-inner">
-      <a href="/home" class="dt-menubar-brand"><span class="dt-brand-main">Conductor1<span class="dt-brand-tm" aria-label="trademark">™</span></span><span class="dt-brand-sub">by Integrion</span></a>
+      <a href="/home" class="dt-menubar-brand" aria-label="Home">
+        <img class="dt-brand-logo" src="/assets/integrion_logo.png" alt="Integrion" />
+        <span class="dt-sr-only">Home</span>
+      </a>
       <nav class="dt-nav" aria-label="Main">
         <a href="/home" class="dt-nav-link{_nav_active('home')}">Home</a>
         <a href="/controls" class="dt-nav-link{_nav_active('controls')}">Controls</a>
