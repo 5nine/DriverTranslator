@@ -37,9 +37,12 @@ async def handle_client(
     health.rti_clients += 1
 
     def _write_rti_line(resp_line: str) -> None:
+        wire = crlf_line(resp_line)
         if runtime.expanded_log:
             LOG.info("RTI <- %s", resp_line)
-        writer.write(crlf_line(resp_line))
+            LOG.info("RTI <- repr=%r", resp_line)
+            LOG.info("RTI <- wire=%r", wire)
+        writer.write(wire)
 
     async def _read_protocol_line() -> Optional[str]:
         """
