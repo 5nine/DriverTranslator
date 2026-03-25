@@ -97,6 +97,15 @@ async def handle_http_client(
             early_params.get("ui_sess", "")
         )
 
+        if path_only == "/assets/integrion_logo.png":
+            try:
+                body = _ASSET_LOGO_PATH.read_bytes()
+            except FileNotFoundError:
+                writer.write(http_response("404 Not Found", "text/plain", b"not found"))
+                return
+            writer.write(http_response("200 OK", "image/png", body))
+            return
+
         # Require Basic auth (except /control/* with valid ui_sess from this session's status page).
         if cfg.http_status_password:
             pw = parse_basic_auth_password(data)
@@ -106,15 +115,6 @@ async def handle_http_client(
 
         if method != "GET":
             writer.write(http_response("405 Method Not Allowed", "text/plain", b"method not allowed"))
-            return
-
-        if path_only == "/assets/integrion_logo.png":
-            try:
-                body = _ASSET_LOGO_PATH.read_bytes()
-            except FileNotFoundError:
-                writer.write(http_response("404 Not Found", "text/plain", b"not found"))
-                return
-            writer.write(http_response("200 OK", "image/png", body))
             return
 
         snapshot = build_status_snapshot(cfg=cfg, health=health, amx=amx, started_at=started_at)
