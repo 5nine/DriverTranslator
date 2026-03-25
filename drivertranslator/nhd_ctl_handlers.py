@@ -185,9 +185,22 @@ def handle_config_get(cfg: Config, session: NhdCtlSession, state: ControllerStat
                             r.alias,
                             r.hostname,
                         )
-                lines.append(
-                    f"{r.hostname.strip(' \\t\\r\\n\\u00a0')}'s alias is {r.alias.strip(' \\t\\r\\n\\u00a0')}"
-                )
+                _hn = r.hostname.strip(" \t\r\n\u00a0")
+                _al = r.alias.strip(" \t\r\n\u00a0")
+                _line = f"{_hn}'s alias is {_al}"
+                if cfg.expanded_log and _al.startswith(("OUT10-", "OUT20-", "OUT30-", "OUT40-", "OUT50-")):
+                    LOG.info("DT DEBUG name: fmt rx line=%r", _line)
+                    LOG.info(
+                        "DT DEBUG name: fmt rx tail_alias=%r tail_codes=%s",
+                        _al[-6:],
+                        ",".join(str(ord(c)) for c in _al[-6:]),
+                    )
+                    LOG.info(
+                        "DT DEBUG name: fmt rx tail_host=%r tail_codes=%s",
+                        _hn[-6:],
+                        ",".join(str(ord(c)) for c in _hn[-6:]),
+                    )
+                lines.append(_line)
             for t in cfg.tx_by_alias.values():
                 if cfg.expanded_log:
                     if t.alias.endswith("0") or t.hostname.endswith("0"):
@@ -196,9 +209,22 @@ def handle_config_get(cfg: Config, session: NhdCtlSession, state: ControllerStat
                             t.alias,
                             t.hostname,
                         )
-                lines.append(
-                    f"{t.hostname.strip(' \\t\\r\\n\\u00a0')}'s alias is {t.alias.strip(' \\t\\r\\n\\u00a0')}"
-                )
+                _hn = t.hostname.strip(" \t\r\n\u00a0")
+                _al = t.alias.strip(" \t\r\n\u00a0")
+                _line = f"{_hn}'s alias is {_al}"
+                if cfg.expanded_log and _al.startswith(("IN10-",)):
+                    LOG.info("DT DEBUG name: fmt tx line=%r", _line)
+                    LOG.info(
+                        "DT DEBUG name: fmt tx tail_alias=%r tail_codes=%s",
+                        _al[-6:],
+                        ",".join(str(ord(c)) for c in _al[-6:]),
+                    )
+                    LOG.info(
+                        "DT DEBUG name: fmt tx tail_host=%r tail_codes=%s",
+                        _hn[-6:],
+                        ",".join(str(ord(c)) for c in _hn[-6:]),
+                    )
+                lines.append(_line)
             return lines
 
         token = parts[3]
