@@ -1615,7 +1615,7 @@ async def handle_http_client(
 
   <div class="dt-footer">
     <div class="dt-powered">
-      <span>Powered by 'integrion_logo'</span>
+      <span>Powered by</span>
       <img class="dt-brand-logo dt-brand-logo-footer" src="/assets/integrion_logo.png" alt="Integrion" />
     </div>
     <button class="btn" id="themeBtn" type="button">Theme</button>
