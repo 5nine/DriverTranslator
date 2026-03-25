@@ -1425,6 +1425,7 @@ async def handle_http_client(
   <section id="page-home" class="dt-page"{_page_hidden('home')}>
   <div class="section-title">Overview</div>
   <div class="card" id="homeOverviewCard">
+    <div class="row"><div>Status</div><div><span class="ok">Service online</span></div></div>
     <div class="row"><div>Uptime</div><div><code>{uptime_h}</code></div></div>
     <div class="row"><div>Mode</div><div><code>{snapshot['mode']}</code></div></div>
     <div class="row"><div>RTI clients</div><div><code>{snapshot['rti_clients']}</code></div></div>
