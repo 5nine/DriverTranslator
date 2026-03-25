@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import binascii
 import contextlib
 import logging
 from typing import Any, List, Optional
@@ -42,6 +43,9 @@ async def handle_client(
             LOG.info("RTI <- %s", resp_line)
             LOG.info("RTI <- repr=%r", resp_line)
             LOG.info("RTI <- wire=%r", wire)
+            tail = wire[-16:] if len(wire) > 16 else wire
+            LOG.info("RTI <- wire_len=%d", len(wire))
+            LOG.info("RTI <- wire_tail_hex=%s", binascii.hexlify(tail).decode("ascii"))
         writer.write(wire)
 
     async def _read_protocol_line() -> Optional[str]:
