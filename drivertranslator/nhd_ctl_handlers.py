@@ -155,18 +155,26 @@ def handle_config_get(cfg: Config, session: NhdCtlSession, state: ControllerStat
         if len(parts) == 3:
             lines: List[str] = []
             for r in cfg.rx_by_alias.values():
-                lines.append(f"{r.hostname.strip()}'s alias is {r.alias.strip()}")
+                lines.append(
+                    f"{r.hostname.strip(' \\t\\r\\n\\u00a0')}'s alias is {r.alias.strip(' \\t\\r\\n\\u00a0')}"
+                )
             for t in cfg.tx_by_alias.values():
-                lines.append(f"{t.hostname.strip()}'s alias is {t.alias.strip()}")
+                lines.append(
+                    f"{t.hostname.strip(' \\t\\r\\n\\u00a0')}'s alias is {t.alias.strip(' \\t\\r\\n\\u00a0')}"
+                )
             return lines
 
         token = parts[3]
         tx = lookup_tx(cfg, token)
         if tx is not None:
-            return [f"{tx.hostname.strip()}'s alias is {tx.alias.strip()}"]
+            return [
+                f"{tx.hostname.strip(' \\t\\r\\n\\u00a0')}'s alias is {tx.alias.strip(' \\t\\r\\n\\u00a0')}"
+            ]
         rx = lookup_rx(cfg, token)
         if rx is not None:
-            return [f"{rx.hostname.strip()}'s alias is {rx.alias.strip()}"]
+            return [
+                f"{rx.hostname.strip(' \\t\\r\\n\\u00a0')}'s alias is {rx.alias.strip(' \\t\\r\\n\\u00a0')}"
+            ]
         return ["unknown command"]
 
     if parts[:3] == ["config", "get", "devicejsonstring"]:

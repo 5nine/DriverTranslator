@@ -6,12 +6,12 @@ from .models import Config, ControllerState, Rx, Tx
 
 
 def lookup_tx(cfg: Config, token: str) -> Optional[Tx]:
-    t = (token or "").strip()
+    t = (token or "").strip(" \t\r\n\u00a0")
     return cfg.tx_by_alias.get(t) or cfg.tx_by_hostname.get(t)
 
 
 def lookup_rx(cfg: Config, token: str) -> Optional[Rx]:
-    t = (token or "").strip()
+    t = (token or "").strip(" \t\r\n\u00a0")
     return cfg.rx_by_alias.get(t) or cfg.rx_by_hostname.get(t)
 
 
