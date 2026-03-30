@@ -23,19 +23,27 @@ def handle_config_get(cfg: Config, session: NhdCtlSession, state: ControllerStat
 
     if parts[:3] == ["config", "get", "ipsetting"]:
         ip = cfg.nhd.ipsetting
-        return [f"ipsetting is:static {ip['ip4addr']} {ip['netmask']} {ip['gateway']}"]
+        return [
+            f"ipsetting is: ip4addr {ip['ip4addr']} netmask {ip['netmask']} gateway {ip['gateway']}"
+        ]
 
     if parts[:3] == ["config", "get", "ipsetting2"]:
         ip = cfg.nhd.ipsetting2
-        return [f"ipsetting2 is:static {ip['ip4addr']} {ip['netmask']} {ip['gateway']}"]
+        return [
+            f"ipsetting2 is: ip4addr {ip['ip4addr']} netmask {ip['netmask']} gateway {ip['gateway']}"
+        ]
 
     if parts[:3] == ["config", "get", "newip4addr"]:
         ip = cfg.nhd.ipsetting
-        return [f"ipsetting is:static {ip['ip4addr']} {ip['netmask']} {ip['gateway']}"]
+        return [
+            f"ipsetting is: ip4addr {ip['ip4addr']} netmask {ip['netmask']} gateway {ip['gateway']}"
+        ]
 
     if parts[:3] == ["config", "get", "newip4addr2"]:
         ip = cfg.nhd.ipsetting2
-        return [f"ipsetting2 is:static {ip['ip4addr']} {ip['netmask']} {ip['gateway']}"]
+        return [
+            f"ipsetting2 is: ip4addr {ip['ip4addr']} netmask {ip['netmask']} gateway {ip['gateway']}"
+        ]
 
     if parts[:3] == ["config", "get", "telnet"] and len(parts) >= 4 and parts[3] == "alias":
         return ["telnet alias is on" if session.alias_mode else "telnet alias is off"]

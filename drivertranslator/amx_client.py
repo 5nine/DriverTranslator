@@ -107,35 +107,36 @@ class AmxClient:
             )
 
     async def verify_stream(self, *, decoder_ip: str, expected_stream: int, timeout_ms: int) -> bool:
-        # Stateless client: open a connection and query status
-        try:
-            reader, writer = await open_connection(
-                decoder_ip,
-                self._decoder_port,
-                timeout=self._connect_timeout,
-                local_addr=self._local_addr,
-            )
-        except Exception:
-            return False
-
-        try:
-            writer.write(b"?\r")
-            await writer.drain()
-            data = b""
+        # Port 50002 supports a single connection at a time; serialize with the per-decoder lock.
+        async with self._lock_for(decoder_ip):
             try:
-                data = await asyncio.wait_for(reader.read(4096), timeout=timeout_ms / 1000)
+                reader, writer = await open_connection(
+                    decoder_ip,
+                    self._decoder_port,
+                    timeout=self._connect_timeout,
+                    local_addr=self._local_addr,
+                )
             except Exception:
-                pass
-            log_amx_inbound(
-                enabled=self._expanded_log, decoder_ip=decoder_ip, decoder_port=self._decoder_port, data=data
-            )
-            parsed = parse_amx_status(data)
-            got = parsed.get("STREAM")
-            return got == str(expected_stream)
-        finally:
-            writer.close()
-            with contextlib.suppress(Exception):
-                await writer.wait_closed()
+                return False
+
+            try:
+                writer.write(b"?\r")
+                await writer.drain()
+                data = b""
+                try:
+                    data = await asyncio.wait_for(reader.read(4096), timeout=timeout_ms / 1000)
+                except Exception:
+                    pass
+                log_amx_inbound(
+                    enabled=self._expanded_log, decoder_ip=decoder_ip, decoder_port=self._decoder_port, data=data
+                )
+                parsed = parse_amx_status(data)
+                got = parsed.get("STREAM")
+                return got == str(expected_stream)
+            finally:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
 
     async def get_hdmi_output(self, *, decoder_ip: str, timeout_ms: int) -> Optional[bool]:
         # Keep port 50002 command-safe: share the same per-RX lock as set_stream/set_hdmi_output.

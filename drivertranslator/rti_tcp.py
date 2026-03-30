@@ -267,6 +267,8 @@ async def handle_client(
                             await notifier.problem(
                                 "amx.breakaway.video", f"DT: ERROR AMX breakaway video route failed: {e}"
                             )
+                            # Be conservative: if AMX routing errored, don't keep an optimistic video route.
+                            state.set_breakaway(kind="video", tx_alias=None, rx_aliases=rx_aliases)
 
                     # For matrix <kind> set, mirror the raw incoming command exactly.
                     # old (normalized mirror): _write_rti_line(line_norm)

@@ -89,6 +89,14 @@ class ControllerState:
     Shared state across sessions to emulate the controller.
 
     RTI drivers commonly rely on matrix query commands to populate feedback variables.
+
+    Concurrency model:
+    - This object is designed for single-threaded asyncio use (one event loop).
+    - All mutation methods are synchronous and contain no `await`, so each mutation runs to completion
+      without yielding control to other coroutines.
+    - If future changes introduce multi-threaded access (threads, executors, multiple loops), add an
+      explicit lock and convert mutations/snapshots to `async` methods (or funnel all updates through
+      a single state-owner task).
     """
 
     def __init__(self, cfg: Config) -> None:
