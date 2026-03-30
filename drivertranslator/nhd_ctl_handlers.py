@@ -16,7 +16,10 @@ from .protocol_helpers import (
 def handle_config_get(cfg: Config, session: NhdCtlSession, state: ControllerState, cmd: str) -> List[str]:
     parts = cmd.split()
     if parts[:3] == ["config", "get", "version"]:
-        return [f"API version: v{cfg.nhd.api} System version: v{cfg.nhd.web}(v{cfg.nhd.core})"]
+        return [
+            f"API version: v{cfg.nhd.api}",
+            f"System version: v{cfg.nhd.web}(v{cfg.nhd.core})",
+        ]
 
     if parts[:3] == ["config", "get", "ipsetting"]:
         ip = cfg.nhd.ipsetting

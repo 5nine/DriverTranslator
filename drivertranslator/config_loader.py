@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import List, Set
 
 from .models import Config, NhdCtlIdentity, Rx, Tx
 from .utils import as_bool, as_int, bind_addr, clamp_int, opt_str
+
+LOG = logging.getLogger("drivertranslator")
 
 
 def load_config(path: str) -> Config:
@@ -121,6 +124,7 @@ def load_config(path: str) -> Config:
 
 def validate_config(cfg: Config) -> None:
     errors: List[str] = []
+    warnings: List[str] = []
 
     if not cfg.tx_by_alias:
         errors.append("No TX endpoints configured.")
@@ -130,13 +134,13 @@ def validate_config(cfg: Config) -> None:
     # Aliases and streams
     for tx in cfg.tx_by_alias.values():
         if not tx.alias.upper().startswith("IN"):
-            errors.append(f"TX alias does not start with IN: {tx.alias}")
+            warnings.append(f"TX alias does not start with IN: {tx.alias}")
         if tx.amx_stream <= 0:
             errors.append(f"TX has invalid amx_stream (must be > 0): {tx.alias} -> {tx.amx_stream}")
 
     for rx in cfg.rx_by_alias.values():
         if not rx.alias.upper().startswith("OUT"):
-            errors.append(f"RX alias does not start with OUT: {rx.alias}")
+            warnings.append(f"RX alias does not start with OUT: {rx.alias}")
         if not rx.amx_decoder_ip:
             errors.append(f"RX missing amx_decoder_ip: {rx.alias}")
 
@@ -145,6 +149,10 @@ def validate_config(cfg: Config) -> None:
 
     if cfg.http_status_port <= 0 or cfg.http_status_port > 65535:
         errors.append(f"Invalid http_status.port: {cfg.http_status_port}")
+
+    if warnings:
+        for w in warnings:
+            LOG.warning("Config warning: %s", w)
 
     if errors:
         raise ValueError("Config validation failed:\n- " + "\n- ".join(errors))

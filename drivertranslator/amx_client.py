@@ -373,7 +373,7 @@ class DryRunAmxClient:
             raise ConnectionError(f"(dry-run) Simulated offline decoder: {decoder_ip}:{self._decoder_port}")
         self._ensure_sim_state(decoder_ip)
         self._sim_stream[decoder_ip] = int(stream)
-        cmd = f"set:{stream}\\r".encode("ascii")
+        cmd = f"set:{stream}\r".encode("ascii")
         LOG.info("AMX (dry-run) -> %s:%d %r", decoder_ip, self._decoder_port, cmd)
 
     async def verify_stream(self, *, decoder_ip: str, expected_stream: int, timeout_ms: int) -> bool:

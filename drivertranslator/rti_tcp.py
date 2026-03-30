@@ -56,6 +56,12 @@ async def handle_client(
         SB = 250
         SE = 240
 
+        # Telnet IAC sequences may be split across TCP reads. Keep trailing
+        # partial sequences and prepend them to the next chunk.
+        if not hasattr(_read_protocol_line, "_pending_telnet"):
+            setattr(_read_protocol_line, "_pending_telnet", bytearray())
+        pending_telnet: bytearray = getattr(_read_protocol_line, "_pending_telnet")
+
         async def _telnet_filter_and_respond(data: bytes) -> bytes:
             out = bytearray()
             i = 0
@@ -66,8 +72,9 @@ async def handle_client(
                     i += 1
                     continue
 
-                # IAC at end of chunk: drop and continue.
+                # IAC at end of chunk: keep for next read.
                 if i + 1 >= len(data):
+                    pending_telnet.extend(data[i:])
                     break
                 cmd = data[i + 1]
 
@@ -85,6 +92,10 @@ async def handle_client(
                             j += 2
                             break
                         j += 1
+                    if j >= len(data):
+                        # Incomplete subnegotiation at end of chunk: keep for next read.
+                        pending_telnet.extend(data[i:])
+                        break
                     i = j
                     continue
 
@@ -103,6 +114,7 @@ async def handle_client(
                         i += 3
                         continue
                     # Incomplete negotiation bytes at end of chunk.
+                    pending_telnet.extend(data[i:])
                     break
 
                 # Other 2-byte telnet command; ignore.
@@ -134,6 +146,9 @@ async def handle_client(
                     line = raw.decode("utf-8", errors="replace").strip()
                     return line or None
                 return None
+            if pending_telnet:
+                chunk = bytes(pending_telnet) + chunk
+                pending_telnet.clear()
             app_bytes = await _telnet_filter_and_respond(chunk)
             if app_bytes:
                 buf.extend(app_bytes)
@@ -170,95 +185,94 @@ async def handle_client(
             # Breakaway switching
             if len(parts) >= 5 and parts_lower[0] == "matrix" and parts_lower[2] == "set":
                 # matrix <kind> set <TX|NULL> <RX...>
-                if len(parts) >= 5 and parts_lower[0] == "matrix" and parts_lower[2] == "set":
-                    kind = parts[1].lower()
-                    tx_token = parts[3]
-                    rx_tokens = parts[4:]
+                kind = parts[1].lower()
+                tx_token = parts[3]
+                rx_tokens = parts[4:]
 
-                    tx_obj = lookup_tx(cfg, tx_token)
-                    tx_alias = None
-                    if tx_obj is None:
-                        if tx_token.upper() != "NULL":
-                            _write_rti_line("unknown command")
-                            await writer.drain()
-                            continue
-                    else:
-                        tx_alias = tx_obj.alias
-
-                    rx_aliases: List[str] = []
-                    for tok in rx_tokens:
-                        rx_obj = lookup_rx(cfg, tok)
-                        if rx_obj is None:
-                            _write_rti_line("unknown command")
-                            await writer.drain()
-                            break
-                        rx_aliases.append(rx_obj.alias)
-                    else:
-                        state.set_breakaway(kind=kind, tx_alias=tx_alias, rx_aliases=rx_aliases)
-
-                        # Only video breakaway affects AMX in our model
-                        if kind == "video" and tx_obj is not None:
-                            try:
-                                failures, status_by_rx = await apply_amx_command_to_rx_aliases(
-                                    cfg=cfg,
-                                    amx=amx,
-                                    state=state,
-                                    rx_aliases=rx_aliases,
-                                    command=f"set:{tx_obj.amx_stream}",
-                                    timeout_ms=runtime.amx_verify_timeout_ms,
-                                )
-                                if failures:
-                                    for (rx_a, ip, err) in failures:
-                                        LOG.error("AMX SEND FAIL breakaway decoder=%s rx=%s cmd=%r err=%s", ip, rx_a, f"set:{tx_obj.amx_stream}", err)
-                                        await notifier.problem(
-                                            f"amx.set.{ip}",
-                                            f"DT: ERROR AMX breakaway video route failed: {rx_a} ({ip}): {err}",
-                                        )
-                                    await notifier.problem(
-                                        "amx.breakaway.video.partial",
-                                        "DT: ERROR AMX breakaway video route failed on: "
-                                        + ", ".join(f"{rx_a}({ip})" for (rx_a, ip, _e) in failures[:3])
-                                        + (" ..." if len(failures) > 3 else ""),
-                                    )
-
-                                # Prefer AMX-reported STREAM for touched RXs; if missing/unusable, fall back to NULL.
-                                failed_rx = {rx_a for (rx_a, _ip, _err) in failures}
-                                for rx_a in rx_aliases:
-                                    if rx_a in failed_rx:
-                                        state.set_breakaway(kind="video", tx_alias=None, rx_aliases=[rx_a])
-                                        continue
-                                    stream_reported = (status_by_rx.get(rx_a, {}).get("STREAM") or "").strip()
-                                    if not stream_reported:
-                                        state.set_breakaway(kind="video", tx_alias=tx_alias, rx_aliases=[rx_a])
-                                    else:
-                                        amx_tx_alias = tx_alias_from_amx_stream(cfg, stream_reported)
-                                        state.set_breakaway(
-                                            kind="video",
-                                            tx_alias=(amx_tx_alias if amx_tx_alias is not None else tx_alias),
-                                            rx_aliases=[rx_a],
-                                        )
-
-                                if (not cfg.amx_dry_run) and runtime.amx_verify_after_set:
-                                    expected = str(tx_obj.amx_stream)
-                                    for rx_a in rx_aliases:
-                                        got = (status_by_rx.get(rx_a, {}).get("STREAM") or "").strip()
-                                        ip = cfg.rx_by_alias[rx_a].amx_decoder_ip
-                                        if got != expected:
-                                            await notifier.problem(
-                                                f"amx.verify.{ip}",
-                                                f"DT: ERROR AMX verify failed: {rx_a} expected STREAM {expected}",
-                                            )
-                            except Exception as e:
-                                LOG.exception("AMX routing failed")
-                                await notifier.problem(
-                                    "amx.breakaway.video", f"DT: ERROR AMX breakaway video route failed: {e}"
-                                )
-
-                        # For matrix <kind> set, mirror the raw incoming command exactly.
-                        # old (normalized mirror): _write_rti_line(line_norm)
-                        _write_rti_line(line)  # command mirror ack
+                tx_obj = lookup_tx(cfg, tx_token)
+                tx_alias = None
+                if tx_obj is None:
+                    if tx_token.upper() != "NULL":
+                        _write_rti_line("unknown command")
                         await writer.drain()
                         continue
+                else:
+                    tx_alias = tx_obj.alias
+
+                rx_aliases: List[str] = []
+                for tok in rx_tokens:
+                    rx_obj = lookup_rx(cfg, tok)
+                    if rx_obj is None:
+                        _write_rti_line("unknown command")
+                        await writer.drain()
+                        break
+                    rx_aliases.append(rx_obj.alias)
+                else:
+                    state.set_breakaway(kind=kind, tx_alias=tx_alias, rx_aliases=rx_aliases)
+
+                    # Only video breakaway affects AMX in our model
+                    if kind == "video" and tx_obj is not None:
+                        try:
+                            failures, status_by_rx = await apply_amx_command_to_rx_aliases(
+                                cfg=cfg,
+                                amx=amx,
+                                state=state,
+                                rx_aliases=rx_aliases,
+                                command=f"set:{tx_obj.amx_stream}",
+                                timeout_ms=runtime.amx_verify_timeout_ms,
+                            )
+                            if failures:
+                                for (rx_a, ip, err) in failures:
+                                    LOG.error("AMX SEND FAIL breakaway decoder=%s rx=%s cmd=%r err=%s", ip, rx_a, f"set:{tx_obj.amx_stream}", err)
+                                    await notifier.problem(
+                                        f"amx.set.{ip}",
+                                        f"DT: ERROR AMX breakaway video route failed: {rx_a} ({ip}): {err}",
+                                    )
+                                await notifier.problem(
+                                    "amx.breakaway.video.partial",
+                                    "DT: ERROR AMX breakaway video route failed on: "
+                                    + ", ".join(f"{rx_a}({ip})" for (rx_a, ip, _e) in failures[:3])
+                                    + (" ..." if len(failures) > 3 else ""),
+                                )
+
+                            # Prefer AMX-reported STREAM for touched RXs; if missing/unusable, fall back to NULL.
+                            failed_rx = {rx_a for (rx_a, _ip, _err) in failures}
+                            for rx_a in rx_aliases:
+                                if rx_a in failed_rx:
+                                    state.set_breakaway(kind="video", tx_alias=None, rx_aliases=[rx_a])
+                                    continue
+                                stream_reported = (status_by_rx.get(rx_a, {}).get("STREAM") or "").strip()
+                                if not stream_reported:
+                                    state.set_breakaway(kind="video", tx_alias=tx_alias, rx_aliases=[rx_a])
+                                else:
+                                    amx_tx_alias = tx_alias_from_amx_stream(cfg, stream_reported)
+                                    state.set_breakaway(
+                                        kind="video",
+                                        tx_alias=(amx_tx_alias if amx_tx_alias is not None else tx_alias),
+                                        rx_aliases=[rx_a],
+                                    )
+
+                            if (not cfg.amx_dry_run) and runtime.amx_verify_after_set:
+                                expected = str(tx_obj.amx_stream)
+                                for rx_a in rx_aliases:
+                                    got = (status_by_rx.get(rx_a, {}).get("STREAM") or "").strip()
+                                    ip = cfg.rx_by_alias[rx_a].amx_decoder_ip
+                                    if got != expected:
+                                        await notifier.problem(
+                                            f"amx.verify.{ip}",
+                                            f"DT: ERROR AMX verify failed: {rx_a} expected STREAM {expected}",
+                                        )
+                        except Exception as e:
+                            LOG.exception("AMX routing failed")
+                            await notifier.problem(
+                                "amx.breakaway.video", f"DT: ERROR AMX breakaway video route failed: {e}"
+                            )
+
+                    # For matrix <kind> set, mirror the raw incoming command exactly.
+                    # old (normalized mirror): _write_rti_line(line_norm)
+                    _write_rti_line(line)  # command mirror ack
+                    await writer.drain()
+                    continue
 
             # Matrix query commands used for RTI feedback variables
             if len(parts) >= 2 and parts_lower[0] == "matrix" and "get" in parts_lower:
