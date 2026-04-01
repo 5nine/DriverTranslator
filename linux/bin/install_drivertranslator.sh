@@ -20,6 +20,7 @@ Usage:
 Optional flags:
   --no-network     Skip NIC static IP configuration
   --no-config      Skip generating / updating config.json
+  --update-config-fields  Update selected fields in existing config.json (safe in-place)
   --config PATH    Config path (default: /opt/drivertranslator/config.json)
   --network-config PATH  Network config path (default: /opt/drivertranslator/network_config.json)
 
@@ -37,6 +38,7 @@ CONFIG_PATH="$CONFIG_PATH_DEFAULT"
 NETWORK_CONFIG_PATH="$NETWORK_CONFIG_PATH_DEFAULT"
 DO_NETWORK=1
 DO_CONFIG=1
+UPDATE_CONFIG_FIELDS=0
 ORIG_ARGS=("$@")
 
 while [[ $# -gt 0 ]]; do
@@ -47,6 +49,7 @@ while [[ $# -gt 0 ]]; do
     --network-config) NETWORK_CONFIG_PATH="$2"; shift 2;;
     --no-network) DO_NETWORK=0; shift 1;;
     --no-config) DO_CONFIG=0; shift 1;;
+    --update-config-fields) UPDATE_CONFIG_FIELDS=1; shift 1;;
     -h|--help) usage; exit 0;;
     *) echo "Unknown arg: $1" >&2; usage; exit 2;;
   esac
@@ -264,7 +267,7 @@ cfg = {
     "connect_timeout_ms": 1000,
     "command_timeout_ms": 1500,
     "dry_run": offline,
-    "persistent": (not offline),
+    "persistent": False,
     "keepalive_seconds": 30,
     "bind_address": amx_bind,
     "verify_after_set": amx_verify,
@@ -284,8 +287,70 @@ Path("${CONFIG_PATH}").write_text(json.dumps(cfg, indent=2) + "\\n", encoding="u
 print("Wrote", "${CONFIG_PATH}")
 PY
   else
-    echo "Config already exists at $CONFIG_PATH (leaving it unchanged)."
-    echo "Delete it if you want the installer to regenerate it."
+    if [[ "$UPDATE_CONFIG_FIELDS" -eq 1 ]]; then
+      echo "Config exists at $CONFIG_PATH. Updating selected fields in-place."
+      read -r -p "Offline emulator mode (no AMX TCP, log only)? (y/N): " OFFLINE
+      OFFLINE="${OFFLINE:-N}"
+      read -r -p "AMX bind address for outbound connections (blank=auto from AVoIP NIC if present): " AMX_BIND_IN
+      read -r -p "Enable AMX verify-after-switch (checks STREAM via ?)? (Y/n): " AMX_VERIFY
+      AMX_VERIFY="${AMX_VERIFY:-Y}"
+      read -r -p "AMX verify timeout ms (default 800): " AMX_VERIFY_TO
+      AMX_VERIFY_TO="${AMX_VERIFY_TO:-800}"
+      read -r -p "Enable AMX self-test on start (connect to all decoders)? (Y/n): " AMX_SELFTEST
+      AMX_SELFTEST="${AMX_SELFTEST:-Y}"
+
+      AMX_BIND_IP=""
+      if [[ -f "$NETWORK_CONFIG_PATH" ]]; then
+        AMX_BIND_IP="$(python3 - <<PY
+import json
+from pathlib import Path
+cfg=json.loads(Path("${NETWORK_CONFIG_PATH}").read_text())
+print(cfg.get("avoip",{}).get("ipv4",{}).get("address",""))
+PY
+)"
+      fi
+      if [[ -n "${AMX_BIND_IN:-}" ]]; then
+        AMX_BIND_IP="${AMX_BIND_IN}"
+      fi
+
+      BACKUP_PATH="${CONFIG_PATH}.$(date +%Y%m%d-%H%M%S).bak"
+      cp "$CONFIG_PATH" "$BACKUP_PATH"
+      echo "Backup written to $BACKUP_PATH"
+
+      python3 - <<PY
+import json
+from pathlib import Path
+
+path = Path("${CONFIG_PATH}")
+raw = json.loads(path.read_text(encoding="utf-8"))
+amx = raw.get("amx")
+if not isinstance(amx, dict):
+    amx = {}
+    raw["amx"] = amx
+
+offline = "${OFFLINE}".strip().lower() in ("y","yes","true","1","on")
+amx_verify = "${AMX_VERIFY}".strip().lower() not in ("n","no","false","0","off")
+amx_verify_to = int("${AMX_VERIFY_TO}")
+amx_selftest = "${AMX_SELFTEST}".strip().lower() not in ("n","no","false","0","off")
+amx_bind = "${AMX_BIND_IP}".strip()
+
+amx["dry_run"] = offline
+amx["persistent"] = False
+amx["verify_after_set"] = amx_verify
+amx["verify_timeout_ms"] = amx_verify_to
+amx["self_test_on_start"] = amx_selftest
+if amx_bind:
+    amx["bind_address"] = amx_bind
+else:
+    amx["bind_address"] = None
+
+path.write_text(json.dumps(raw, indent=2) + "\\n", encoding="utf-8")
+print("Updated", path)
+PY
+    else
+      echo "Config already exists at $CONFIG_PATH (leaving it unchanged)."
+      echo "Use --update-config-fields to update AMX dry-run/live, bind address, and verify/self-test fields."
+    fi
   fi
 fi
 

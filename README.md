@@ -58,6 +58,48 @@ Press `Ctrl+C` to exit. If the manual run works but the service fails, check `jo
 sudo bash ./linux/bin/install_drivertranslator.sh
 ```
 
+### Reinstall / update behavior (existing `config.json`)
+
+When `config.json` already exists, the installer **does not** regenerate endpoint inventory.
+
+- You will **not** be asked again for TX/RX counts or starting TX/RX IP ranges.
+- By default, existing `config.json` is left unchanged.
+
+If you want reinstall to update only key AMX runtime fields in an existing config, run:
+
+```bash
+sudo bash ./linux/bin/install_drivertranslator.sh --update-config-fields
+```
+
+This mode creates a timestamped backup of `config.json` and updates selected `amx` keys in place:
+
+- `dry_run` (switch dry-run/live)
+- `bind_address` (set AMX outbound bind IP, typically AVoIP NIC IP)
+- `verify_after_set`
+- `verify_timeout_ms`
+- `self_test_on_start`
+- `persistent` is forced to `false` (persistent mode is intentionally disabled)
+
+### Dry-run -> live checklist
+
+1. Confirm AVoIP NIC has a static IP (installer network step or netplan).
+2. Re-run installer with AMX field update mode:
+
+```bash
+sudo bash ./linux/bin/install_drivertranslator.sh --update-config-fields
+```
+
+3. In prompts, set:
+   - Offline emulator mode: `N` (sets `amx.dry_run=false`)
+   - AMX bind address: AVoIP NIC IP (or leave blank to auto-use AVoIP NIC IP from `network_config.json` when present)
+   - Verify-after-switch: `Y` (recommended for first live cutover)
+   - Self-test on start: `Y`
+4. Let installer restart the service, then check health:
+   - `bash ./linux/bin/monitor_drivertranslator.sh status`
+   - `bash ./linux/bin/monitor_drivertranslator.sh logs`
+   - Status page: `http://<control-nic-ip>:8080/`
+5. In RTI, execute test routes and confirm expected RX source changes + no AMX errors in logs.
+
 If you enable **tty1 auto-login + auto-start log view** in the installer and the console log view shows **permission denied** (or doesn’t show service logs), add your console user to `systemd-journal`:
 
 ```bash
