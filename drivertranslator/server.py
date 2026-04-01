@@ -130,23 +130,24 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         except Exception:
             LOG.exception("Startup AMX self-test failed")
         try:
-            # Also prime TX status on startup so the status page has immediate TX visibility.
-            await refresh_tx_statuses(cfg=cfg, state=state, runtime=runtime)
-            offline_txs = sorted(
-                [
-                    tx_alias
-                    for tx_alias in cfg.tx_by_alias.keys()
-                    if tx_alias not in cfg.tx_skipped_aliases and not state.tx_online.get(tx_alias, False)
-                ],
-                key=tx_alias_sort_key,
-            )
-            if offline_txs:
-                await notifier.problem(
-                    "amx.txstatus.startup",
-                    f"DT: ERROR AMX TX startup status poll: {len(offline_txs)}/{max(1, len(cfg.tx_by_alias) - len(cfg.tx_skipped_aliases))} offline. "
-                    + ", ".join(offline_txs[:5])
-                    + (" ..." if len(offline_txs) > 5 else ""),
+            # Prime TX status on startup when TX polling is enabled.
+            if runtime.amx_tx_poll_enabled:
+                await refresh_tx_statuses(cfg=cfg, state=state, runtime=runtime)
+                offline_txs = sorted(
+                    [
+                        tx_alias
+                        for tx_alias in cfg.tx_by_alias.keys()
+                        if tx_alias not in cfg.tx_skipped_aliases and not state.tx_online.get(tx_alias, False)
+                    ],
+                    key=tx_alias_sort_key,
                 )
+                if offline_txs:
+                    await notifier.problem(
+                        "amx.txstatus.startup",
+                        f"DT: ERROR AMX TX startup status poll: {len(offline_txs)}/{max(1, len(cfg.tx_by_alias) - len(cfg.tx_skipped_aliases))} offline. "
+                        + ", ".join(offline_txs[:5])
+                        + (" ..." if len(offline_txs) > 5 else ""),
+                    )
         except Exception:
             LOG.exception("Startup AMX TX status poll failed")
         try:

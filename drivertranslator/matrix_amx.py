@@ -438,12 +438,15 @@ class TxStatusPoller:
         self._task: Optional[asyncio.Task[None]] = None
 
     async def start(self) -> None:
-        await refresh_tx_statuses(cfg=self._cfg, state=self._state, runtime=self._runtime)
+        if self._runtime.amx_tx_poll_enabled:
+            await refresh_tx_statuses(cfg=self._cfg, state=self._state, runtime=self._runtime)
         self._task = asyncio.create_task(self._loop(), name="dt-tx-status-poller")
 
     async def _loop(self) -> None:
         while True:
             await asyncio.sleep(TX_STATUS_POLL_INTERVAL_SECONDS)
+            if not self._runtime.amx_tx_poll_enabled:
+                continue
             try:
                 await refresh_tx_statuses(cfg=self._cfg, state=self._state, runtime=self._runtime)
             except Exception:

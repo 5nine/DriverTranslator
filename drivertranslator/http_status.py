@@ -379,7 +379,7 @@ async def handle_http_client(
                         value,
                     )
                     bad_msg = (
-                        "Expected key amx_dry_run, amx_verify_after_set, amx_rx_poll_enabled, or expanded_log with true/false, "
+                        "Expected key amx_dry_run, amx_verify_after_set, amx_tx_poll_enabled, amx_rx_poll_enabled, or expanded_log with true/false, "
                         "or amx_verify_timeout_ms with a number (100-5000)."
                     )
                     if want_html:
@@ -433,6 +433,12 @@ async def handle_http_client(
                             f"amx_rx_poll_enabled is now {str(v).lower()} (polls RX getStatus every {RX_STATUS_POLL_INTERVAL_SECONDS}s).",
                             "Takes effect immediately; no service restart needed.",
                         ]
+                    elif key == "amx_tx_poll_enabled":
+                        v = snap.get("amx_tx_poll_enabled")
+                        paras = [
+                            f"amx_tx_poll_enabled is now {str(v).lower()} (polls TX getStatus every {TX_STATUS_POLL_INTERVAL_SECONDS}s).",
+                            "Takes effect immediately; no service restart needed.",
+                        ]
                     else:
                         paras = [
                             f"Updated setting {key!r}.",
@@ -450,6 +456,7 @@ async def handle_http_client(
                                     "amx_dry_run": snap.get("amx_dry_run"),
                                     "amx_persistent": snap.get("amx_persistent"),
                                     "amx_verify_after_set": snap.get("amx_verify_after_set"),
+                                    "amx_tx_poll_enabled": snap.get("amx_tx_poll_enabled"),
                                     "amx_rx_poll_enabled": snap.get("amx_rx_poll_enabled"),
                                     "amx_verify_timeout_ms": snap.get("amx_verify_timeout_ms"),
                                     "expanded_log": snap.get("expanded_log"),
@@ -461,13 +468,14 @@ async def handle_http_client(
                     body = (json.dumps(snap, indent=2) + "\n").encode("utf-8")
                     writer.write(http_response("200 OK", "application/json", body))
                 LOG.info(
-                    "HTTP control [source=%s]: set %s=%r (dry_run=%s persistent=%s verify_after_set=%s rx_poll_enabled=%s verify_timeout_ms=%s expanded_log=%s)",
+                    "HTTP control [source=%s]: set %s=%r (dry_run=%s persistent=%s verify_after_set=%s tx_poll_enabled=%s rx_poll_enabled=%s verify_timeout_ms=%s expanded_log=%s)",
                     ctl_via,
                     key,
                     snap.get(key),
                     snap.get("amx_dry_run"),
                     snap.get("amx_persistent"),
                     snap.get("amx_verify_after_set"),
+                    snap.get("amx_tx_poll_enabled"),
                     snap.get("amx_rx_poll_enabled"),
                     snap.get("amx_verify_timeout_ms"),
                     snap.get("expanded_log"),
@@ -1497,6 +1505,13 @@ async def handle_http_client(
       </div>
     </div>
     <div class="row">
+      <div><b>AMX TX polling</b><span class="help-icon" title="When ON, polls each active TX with AMX getStatus every {TX_STATUS_POLL_INTERVAL_SECONDS}s and updates TX online/signal state. Runtime setting (also saved to config).">?</span></div>
+      <div class="ctrl-actions">
+        <code id="st_amx_tx_poll">{str(rt.get('amx_tx_poll_enabled', True)).lower()}</code>
+        <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="amx_tx_poll_enabled" data-value="{'false' if rt.get('amx_tx_poll_enabled', True) else 'true'}">Toggle</button>
+      </div>
+    </div>
+    <div class="row">
       <div><b>AMX RX polling</b><span class="help-icon" title="When ON, polls each active RX with AMX getStatus every {RX_STATUS_POLL_INTERVAL_SECONDS}s and updates online/route/HDMI state. Runtime setting (also saved to config).">?</span></div>
       <div class="ctrl-actions">
         <code id="st_amx_rx_poll">{str(rt.get('amx_rx_poll_enabled', True)).lower()}</code>
@@ -1698,6 +1713,8 @@ async def handle_http_client(
           return 'AMX verify after switch is now ' + String(j.amx_verify_after_set).toLowerCase() + '. Applies immediately (inactive while RX polling is ON).';
         if (key === 'expanded_log')
           return 'Expanded log is now ' + String(j.expanded_log).toLowerCase() + '. Applies immediately.';
+        if (key === 'amx_tx_poll_enabled')
+          return 'AMX TX polling is now ' + String(j.amx_tx_poll_enabled).toLowerCase() + '. Applies immediately.';
         if (key === 'amx_rx_poll_enabled')
           return 'AMX RX polling is now ' + String(j.amx_rx_poll_enabled).toLowerCase() + '. Applies immediately' + (j.amx_rx_poll_enabled && j.amx_verify_after_set ? '; route verify is currently inactive.' : '.');
         return 'Setting updated. Applies immediately.';
@@ -1760,6 +1777,11 @@ async def handle_http_client(
                 if (el) el.textContent = String(j.amx_rx_poll_enabled).toLowerCase();
                 btn.setAttribute('data-value', j.amx_rx_poll_enabled ? 'false' : 'true');
                 updateVerifyStatus(j);
+              }}
+              if (key === 'amx_tx_poll_enabled') {{
+                const el = document.getElementById('st_amx_tx_poll');
+                if (el) el.textContent = String(j.amx_tx_poll_enabled).toLowerCase();
+                btn.setAttribute('data-value', j.amx_tx_poll_enabled ? 'false' : 'true');
               }}
               return msg;
             }});

@@ -62,6 +62,7 @@ class Config:
     amx_verify_timeout_ms: int
     amx_set_queue_limit: int
     amx_self_test_on_start: bool
+    amx_tx_poll_enabled: bool
     amx_rx_poll_enabled: bool
     amx_set_retry_attempts: int
     amx_set_retry_backoff_initial_ms: int
@@ -200,6 +201,7 @@ class RuntimeSettings:
         self.amx_verify_after_set: bool = cfg.amx_verify_after_set
         self.amx_verify_timeout_ms: int = cfg.amx_verify_timeout_ms
         self.amx_self_test_on_start: bool = cfg.amx_self_test_on_start
+        self.amx_tx_poll_enabled: bool = cfg.amx_tx_poll_enabled
         self.amx_rx_poll_enabled: bool = cfg.amx_rx_poll_enabled
         self.expanded_log: bool = cfg.expanded_log
         self.http_log_lines: int = cfg.http_status_log_lines
@@ -212,6 +214,7 @@ class RuntimeSettings:
                 "amx_verify_after_set": self.amx_verify_after_set,
                 "amx_verify_timeout_ms": self.amx_verify_timeout_ms,
                 "amx_self_test_on_start": self.amx_self_test_on_start,
+                "amx_tx_poll_enabled": self.amx_tx_poll_enabled,
                 "amx_rx_poll_enabled": self.amx_rx_poll_enabled,
                 "expanded_log": self.expanded_log,
                 "http_log_lines": self.http_log_lines,
@@ -230,6 +233,8 @@ class RuntimeSettings:
                 self.amx_self_test_on_start = value
             elif key == "amx_rx_poll_enabled":
                 self.amx_rx_poll_enabled = value
+            elif key == "amx_tx_poll_enabled":
+                self.amx_tx_poll_enabled = value
             elif key == "expanded_log":
                 self.expanded_log = value
             else:
