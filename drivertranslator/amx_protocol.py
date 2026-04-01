@@ -61,3 +61,20 @@ def hdmi_enabled_from_status_fields(fields: Dict[str, str]) -> Optional[bool]:
     if dvi_status == "disconnected":
         return False
     return None
+
+
+def hdmi_link_connected_from_status_fields(fields: Dict[str, str]) -> Optional[bool]:
+    # Preferred explicit HDMI status fields.
+    hdmi_status = (fields.get("HDMISTATUS") or "").strip().lower()
+    if hdmi_status == "connected":
+        return True
+    if hdmi_status == "disconnected":
+        return False
+
+    # Field variant seen on live N2322 captures.
+    dvi_status = (fields.get("DVISTATUS") or "").strip().lower()
+    if dvi_status == "connected":
+        return True
+    if dvi_status == "disconnected":
+        return False
+    return None

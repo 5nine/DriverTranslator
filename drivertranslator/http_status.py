@@ -767,7 +767,7 @@ async def handle_http_client(
                 tx = cfg.tx_by_alias.get(tx_alias)
                 if tx_is_skip:
                     route_rows.append(
-                        f"<tr><td><code>{html.escape(tx_alias)}</code></td><td><code>-</code></td><td class=\"bad\"><b>SKIPPED</b></td><td><b>-</b></td><td>{tx_skip_btn}</td></tr>"
+                        f"<tr><td><code>{html.escape(tx_alias)}</code></td><td><code>-</code></td><td class=\"bad\"><b>SKIPPED</b></td><td><b>-</b></td><td><b>-</b></td><td>{tx_skip_btn}</td></tr>"
                     )
                     continue
                 if tx is None:
@@ -780,7 +780,7 @@ async def handle_http_client(
                 tx_status_cls = "ok" if tx_online else "bad"
                 signal_txt, signal_cls = format_tx_signal(tx_fields)
                 route_rows.append(
-                    f"<tr><td><code>{tx_alias}</code></td><td><code>{stream_txt}</code></td><td class=\"{tx_status_cls}\"><b>{tx_status_txt}</b></td><td class=\"{signal_cls}\"><b>{html.escape(signal_txt)}</b></td><td>{tx_skip_btn}</td></tr>"
+                    f"<tr><td><code>{tx_alias}</code></td><td><code>{stream_txt}</code></td><td class=\"{tx_status_cls}\"><b>{tx_status_txt}</b></td><td class=\"{signal_cls}\"><b>{html.escape(signal_txt)}</b></td><td><b>-</b></td><td>{tx_skip_btn}</td></tr>"
                 )
             for rx_alias in rx_all_aliases:
                 rx_is_skip = bool(rx_skip_by_alias.get(rx_alias, False))
@@ -792,7 +792,7 @@ async def handle_http_client(
                 )
                 if rx_is_skip:
                     route_rows.append(
-                        f"<tr><td><code>{html.escape(rx_alias)}</code></td><td><code>NULL</code></td><td class=\"bad\"><b>SKIPPED</b></td><td><b>-</b></td><td>{rx_skip_btn}</td></tr>"
+                        f"<tr><td><code>{html.escape(rx_alias)}</code></td><td><code>NULL</code></td><td class=\"bad\"><b>SKIPPED</b></td><td><b>-</b></td><td><b>-</b></td><td>{rx_skip_btn}</td></tr>"
                     )
                     continue
                 if rx_alias not in cfg.rx_by_alias:
@@ -802,6 +802,7 @@ async def handle_http_client(
                 status_txt = "ONLINE" if online else "OFFLINE"
                 status_cls = "ok" if online else "bad"
                 hdmi_enabled = state.rx_hdmi_output.get(rx_alias)
+                hdmi_link = state.rx_hdmi_link.get(rx_alias)
                 if hdmi_enabled is True:
                     hdmi_txt = "ON"
                     hdmi_cls = "ok"
@@ -811,8 +812,17 @@ async def handle_http_client(
                 else:
                     hdmi_txt = "UNKNOWN"
                     hdmi_cls = ""
+                if hdmi_link is True:
+                    hdmi_link_txt = "CONNECTED"
+                    hdmi_link_cls = "ok"
+                elif hdmi_link is False:
+                    hdmi_link_txt = "DISCONNECTED"
+                    hdmi_link_cls = "bad"
+                else:
+                    hdmi_link_txt = "UNKNOWN"
+                    hdmi_link_cls = ""
                 route_rows.append(
-                    f"<tr><td><code>{rx_alias}</code></td><td><code>{tx_alias}</code></td><td class=\"{status_cls}\"><b>{status_txt}</b></td><td class=\"{hdmi_cls}\"><b>{hdmi_txt}</b></td><td>{rx_skip_btn}</td></tr>"
+                    f"<tr><td><code>{rx_alias}</code></td><td><code>{tx_alias}</code></td><td class=\"{status_cls}\"><b>{status_txt}</b></td><td class=\"{hdmi_cls}\"><b>{hdmi_txt}</b></td><td class=\"{hdmi_link_cls}\"><b>{hdmi_link_txt}</b></td><td>{rx_skip_btn}</td></tr>"
                 )
             route_html = "\n".join(route_rows)
 
@@ -913,7 +923,7 @@ async def handle_http_client(
             _h_title_devices = html.escape(
                 f"TX rows are polled from AMX getStatus every {TX_STATUS_POLL_INTERVAL_SECONDS}s. "
                 f"RX rows can be polled from AMX getStatus every {RX_STATUS_POLL_INTERVAL_SECONDS}s (toggle in Controls). "
-                "RX HDMI state uses HDMIOFF or DVIOFF/DVISTATUS when available. "
+                "RX HDMI output state uses HDMIOFF or DVIOFF; HDMI link state uses HDMISTATUS or DVISTATUS. "
                 "Skip toggles are saved to config and apply after restart."
             )
             _h_title_logs = html.escape(
@@ -1543,7 +1553,7 @@ async def handle_http_client(
   </div>
   <div class="table-wrap">
   <table>
-    <thead><tr><th>Endpoint</th><th>Route / Stream</th><th>Status</th><th>Signal</th><th>Skip</th></tr></thead>
+    <thead><tr><th>Endpoint</th><th>Route / Stream</th><th>Status</th><th>HDMI Out</th><th>HDMI Link</th><th>Skip</th></tr></thead>
     <tbody id="devicesBody">
       {route_html}
     </tbody>

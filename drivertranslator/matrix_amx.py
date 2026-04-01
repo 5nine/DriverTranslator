@@ -6,7 +6,12 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from .amx_protocol import hdmi_enabled_from_status_fields, log_amx_inbound, parse_amx_status
+from .amx_protocol import (
+    hdmi_enabled_from_status_fields,
+    hdmi_link_connected_from_status_fields,
+    log_amx_inbound,
+    parse_amx_status,
+)
 from .constants import RX_STATUS_POLL_INTERVAL_SECONDS, TX_STATUS_POLL_INTERVAL_SECONDS
 from .models import Config, ControllerState, RuntimeSettings, Rx
 from .networking import open_connection
@@ -48,11 +53,13 @@ async def apply_amx_command_to_rx_aliases(
                 failures.append((a, cfg.rx_by_alias[a].amx_decoder_ip, str(res)))
                 state.set_rx_online(a, False)
                 state.set_rx_hdmi_output(a, None)
+                state.set_rx_hdmi_link(a, None)
             else:
                 state.set_rx_online(a, True)
                 fields = res if isinstance(res, dict) else {}
                 status_by_rx[a] = fields
                 state.set_rx_hdmi_output(a, hdmi_enabled_from_status_fields(fields))
+                state.set_rx_hdmi_link(a, hdmi_link_connected_from_status_fields(fields))
         return failures, status_by_rx
 
     if hasattr(amx, "send_command"):
@@ -280,10 +287,12 @@ async def refresh_rx_statuses(*, cfg: Config, state: ControllerState, runtime: R
         if isinstance(res, BaseException):
             state.set_rx_online(rx_alias, False)
             state.set_rx_hdmi_output(rx_alias, None)
+            state.set_rx_hdmi_link(rx_alias, None)
             continue
         fields = res if isinstance(res, dict) else {}
         state.set_rx_online(rx_alias, bool(fields))
         state.set_rx_hdmi_output(rx_alias, hdmi_enabled_from_status_fields(fields))
+        state.set_rx_hdmi_link(rx_alias, hdmi_link_connected_from_status_fields(fields))
         stream_reported = (fields.get("STREAM") or "").strip()
         if stream_reported:
             amx_tx_alias = tx_alias_from_amx_stream(cfg, stream_reported)

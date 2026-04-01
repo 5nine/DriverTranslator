@@ -111,6 +111,8 @@ class ControllerState:
         self.rx_online: Dict[str, bool] = {rx.alias: True for rx in cfg.rx_by_alias.values()}
         # Best-effort HDMI output state from AMX status (True=on, False=off, None=unknown).
         self.rx_hdmi_output: Dict[str, Optional[bool]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
+        # Best-effort HDMI sink link state from AMX status (True=connected, False=disconnected, None=unknown).
+        self.rx_hdmi_link: Dict[str, Optional[bool]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
         # TX status is refreshed in background every 30 seconds.
         self.tx_online: Dict[str, bool] = {tx.alias: True for tx in cfg.tx_by_alias.values()}
         self.tx_status_fields: Dict[str, Dict[str, str]] = {tx.alias: {} for tx in cfg.tx_by_alias.values()}
@@ -122,6 +124,10 @@ class ControllerState:
     def set_rx_hdmi_output(self, rx_alias: str, enabled: Optional[bool]) -> None:
         if rx_alias in self.rx_hdmi_output:
             self.rx_hdmi_output[rx_alias] = enabled
+
+    def set_rx_hdmi_link(self, rx_alias: str, connected: Optional[bool]) -> None:
+        if rx_alias in self.rx_hdmi_link:
+            self.rx_hdmi_link[rx_alias] = connected
 
     def set_tx_online(self, tx_alias: str, online: bool) -> None:
         if tx_alias in self.tx_online:
