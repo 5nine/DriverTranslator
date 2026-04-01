@@ -1,0 +1,3 @@
+﻿"Mode","Ip","Command","SentHex","SentEscaped","ResponseLen","ResponseHex","ResponseEscaped","ResponseBase64","Error"
+"non_persistent","192.168.1.50","?",,,"0","","","","Connect timeout to 192.168.1.50:50002 after 2000ms"
+"persistent","192.168.1.50","<connect>",,,"0","","","","Connect timeout to 192.168.1.50:50002 after 2000ms"

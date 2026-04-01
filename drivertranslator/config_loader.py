@@ -104,6 +104,7 @@ def load_config(path: str) -> Config:
         amx_verify_timeout_ms=clamp_int(amx.get("verify_timeout_ms"), default=800, min_v=100, max_v=5000),
         amx_set_queue_limit=clamp_int(amx.get("set_queue_limit"), default=1, min_v=1, max_v=20),
         amx_self_test_on_start=as_bool(amx.get("self_test_on_start"), default=True),
+        amx_rx_poll_enabled=as_bool(amx.get("rx_poll_enabled"), default=True),
         amx_set_retry_attempts=clamp_int(amx.get("set_retry_attempts"), default=3, min_v=1, max_v=10),
         amx_set_retry_backoff_initial_ms=clamp_int(amx.get("set_retry_backoff_initial_ms"), default=200, min_v=0, max_v=5000),
         amx_set_retry_backoff_max_ms=clamp_int(amx.get("set_retry_backoff_max_ms"), default=1200, min_v=0, max_v=10000),

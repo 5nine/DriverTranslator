@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from .amx_protocol import hdmi_enabled_from_status_fields, log_amx_inbound, parse_amx_status
-from .constants import TX_STATUS_POLL_INTERVAL_SECONDS
+from .constants import RX_STATUS_POLL_INTERVAL_SECONDS, TX_STATUS_POLL_INTERVAL_SECONDS
 from .models import Config, ControllerState, RuntimeSettings, Rx
 from .networking import open_connection
 from .problem_reporter import LocalProblemReporter
@@ -198,7 +198,7 @@ async def process_matrix_set_line(
                             tx_alias=(amx_tx_alias if amx_tx_alias is not None else tx_alias),
                         )
 
-            if (not cfg.amx_dry_run) and runtime.amx_verify_after_set and tx_alias is not None:
+            if (not cfg.amx_dry_run) and runtime.amx_verify_after_set and (not runtime.amx_rx_poll_enabled) and tx_alias is not None:
                 tx_obj2 = lookup_tx(cfg, tx_alias)
                 expected = str(tx_obj2.amx_stream) if tx_obj2 is not None else None
                 if expected:
@@ -251,62 +251,65 @@ async def process_matrix_set_line(
     )
 
 
-async def refresh_hdmi_outputs(*, cfg: Config, amx: Any, state: ControllerState, timeout_ms: int) -> None:
-    if not hasattr(amx, "get_hdmi_output"):
-        return
+async def refresh_rx_statuses(*, cfg: Config, state: ControllerState, runtime: RuntimeSettings) -> None:
     rx_aliases = sorted(
         [a for a in cfg.rx_by_alias.keys() if a not in cfg.rx_skipped_aliases],
         key=rx_alias_sort_key,
     )
     if not rx_aliases:
         return
-    results = await asyncio.gather(
-        *(
-            amx.get_hdmi_output(
-                decoder_ip=cfg.rx_by_alias[rx_alias].amx_decoder_ip,
+    local_addr = (cfg.amx_bind_address, 0) if cfg.amx_bind_address else None
+    timeout_ms = max(200, min(5000, int(runtime.amx_verify_timeout_ms)))
+    tasks = []
+    for rx_alias in rx_aliases:
+        rx = cfg.rx_by_alias[rx_alias]
+        tasks.append(
+            read_amx_status_fields_from_ip(
+                host=rx.amx_decoder_ip,
+                port=cfg.amx_decoder_port,
+                connect_timeout_ms=cfg.amx_connect_timeout_ms,
                 timeout_ms=timeout_ms,
+                local_addr=local_addr,
+                expanded_log=runtime.expanded_log,
             )
-            for rx_alias in rx_aliases
-        ),
-        return_exceptions=True,
-    )
+        )
+    results = await asyncio.gather(*tasks, return_exceptions=True)
     for rx_alias, res in zip(rx_aliases, results):
         if isinstance(res, BaseException):
             state.set_rx_online(rx_alias, False)
             state.set_rx_hdmi_output(rx_alias, None)
-        else:
-            state.set_rx_hdmi_output(rx_alias, res if isinstance(res, bool) else None)
+            continue
+        fields = res if isinstance(res, dict) else {}
+        state.set_rx_online(rx_alias, bool(fields))
+        state.set_rx_hdmi_output(rx_alias, hdmi_enabled_from_status_fields(fields))
+        stream_reported = (fields.get("STREAM") or "").strip()
+        if stream_reported:
+            amx_tx_alias = tx_alias_from_amx_stream(cfg, stream_reported)
+            if amx_tx_alias is not None:
+                state.set_breakaway(kind="video", tx_alias=amx_tx_alias, rx_aliases=[rx_alias])
 
 
-async def refresh_hdmi_outputs_for_aliases(
-    *,
-    cfg: Config,
-    amx: Any,
-    state: ControllerState,
-    timeout_ms: int,
-    rx_aliases: List[str],
-) -> None:
-    if not hasattr(amx, "get_hdmi_output"):
-        return
-    wanted = [a for a in rx_aliases if a in cfg.rx_by_alias and a not in cfg.rx_skipped_aliases]
-    if not wanted:
-        return
-    results = await asyncio.gather(
-        *(
-            amx.get_hdmi_output(
-                decoder_ip=cfg.rx_by_alias[rx_alias].amx_decoder_ip,
-                timeout_ms=timeout_ms,
-            )
-            for rx_alias in wanted
-        ),
-        return_exceptions=True,
-    )
-    for rx_alias, res in zip(wanted, results):
-        if isinstance(res, BaseException):
-            state.set_rx_online(rx_alias, False)
-            state.set_rx_hdmi_output(rx_alias, None)
-        else:
-            state.set_rx_hdmi_output(rx_alias, res if isinstance(res, bool) else None)
+class RxStatusPoller:
+    def __init__(self, *, cfg: Config, state: ControllerState, runtime: RuntimeSettings) -> None:
+        self._cfg = cfg
+        self._state = state
+        self._runtime = runtime
+        self._task: Optional[asyncio.Task[None]] = None
+
+    async def start(self) -> None:
+        if self._runtime.amx_rx_poll_enabled:
+            await refresh_rx_statuses(cfg=self._cfg, state=self._state, runtime=self._runtime)
+        self._task = asyncio.create_task(self._loop(), name="dt-rx-status-poller")
+
+    async def _loop(self) -> None:
+        while True:
+            await asyncio.sleep(RX_STATUS_POLL_INTERVAL_SECONDS)
+            if not self._runtime.amx_rx_poll_enabled:
+                continue
+            try:
+                await refresh_rx_statuses(cfg=self._cfg, state=self._state, runtime=self._runtime)
+            except Exception:
+                LOG.exception("RX status poll failed")
 
 
 async def read_amx_status_fields_from_ip(
@@ -362,7 +365,8 @@ async def refresh_tx_statuses(*, cfg: Config, state: ControllerState, runtime: R
         return
 
     local_addr = (cfg.amx_bind_address, 0) if cfg.amx_bind_address else None
-    timeout_ms = max(200, min(5000, int(runtime.amx_verify_timeout_ms)))
+    # TX polling timeout should follow AMX command/read timeout, not post-route verify tuning.
+    timeout_ms = max(200, min(5000, int(cfg.amx_command_timeout_ms)))
     tasks = []
     for tx_alias in tx_aliases:
         tx = cfg.tx_by_alias[tx_alias]

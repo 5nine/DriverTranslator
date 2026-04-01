@@ -41,4 +41,14 @@ def hdmi_enabled_from_status_fields(fields: Dict[str, str]) -> Optional[bool]:
         return False
     if hdmi_off == "off":
         return True
+    dvi_off = (fields.get("DVIOFF") or "").strip().lower()
+    if dvi_off in ("1", "on", "true"):
+        return False
+    if dvi_off in ("0", "off", "false"):
+        return True
+    dvi_status = (fields.get("DVISTATUS") or "").strip().lower()
+    if dvi_status == "connected":
+        return True
+    if dvi_status == "disconnected":
+        return False
     return None

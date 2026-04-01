@@ -9,7 +9,7 @@ from typing import Any, Optional
 from .amx_client import AmxClient, DryRunAmxClient, PersistentAmxClient
 from .amx_self_test import amx_self_test
 from .http_status import handle_http_client
-from .matrix_amx import TxStatusPoller, refresh_tx_statuses
+from .matrix_amx import RxStatusPoller, TxStatusPoller, refresh_rx_statuses, refresh_tx_statuses
 from .models import Config, ControllerState, HealthState, ProblemState, RuntimeSettings
 from .problem_reporter import LocalProblemReporter
 from .rti_control_udp import RtiControlUdp
@@ -161,9 +161,16 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
                 )
         except Exception:
             LOG.exception("Startup AMX TX status poll failed")
+        try:
+            if runtime.amx_rx_poll_enabled:
+                await refresh_rx_statuses(cfg=cfg, state=state, runtime=runtime)
+        except Exception:
+            LOG.exception("Startup AMX RX status poll failed")
 
     tx_poller = TxStatusPoller(cfg=cfg, state=state, runtime=runtime)
     await tx_poller.start()
+    rx_poller = RxStatusPoller(cfg=cfg, state=state, runtime=runtime)
+    await rx_poller.start()
 
     if cfg.http_status_enabled:
         http_server = await asyncio.start_server(

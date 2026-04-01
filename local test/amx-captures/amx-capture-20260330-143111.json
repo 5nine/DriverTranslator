@@ -1,0 +1,62 @@
+﻿[
+    {
+        "Mode":  "non_persistent",
+        "Ip":  "192.168.1.51 192.168.1.52",
+        "Command":  "set:1",
+        "SentHex":  null,
+        "SentEscaped":  null,
+        "ResponseLen":  0,
+        "ResponseHex":  "",
+        "ResponseEscaped":  "",
+        "ResponseBase64":  "",
+        "Error":  "Exception calling \"EndConnect\" with \"1\" argument(s): \"Ingen sådan värd är känd\""
+    },
+    {
+        "Mode":  "non_persistent",
+        "Ip":  "192.168.1.51 192.168.1.52",
+        "Command":  "?",
+        "SentHex":  null,
+        "SentEscaped":  null,
+        "ResponseLen":  0,
+        "ResponseHex":  "",
+        "ResponseEscaped":  "",
+        "ResponseBase64":  "",
+        "Error":  "Exception calling \"EndConnect\" with \"1\" argument(s): \"Ingen sådan värd är känd\""
+    },
+    {
+        "Mode":  "non_persistent",
+        "Ip":  "192.168.1.51 192.168.1.52",
+        "Command":  "set:2",
+        "SentHex":  null,
+        "SentEscaped":  null,
+        "ResponseLen":  0,
+        "ResponseHex":  "",
+        "ResponseEscaped":  "",
+        "ResponseBase64":  "",
+        "Error":  "Exception calling \"EndConnect\" with \"1\" argument(s): \"Ingen sådan värd är känd\""
+    },
+    {
+        "Mode":  "non_persistent",
+        "Ip":  "192.168.1.51 192.168.1.52",
+        "Command":  "hdmiOff",
+        "SentHex":  null,
+        "SentEscaped":  null,
+        "ResponseLen":  0,
+        "ResponseHex":  "",
+        "ResponseEscaped":  "",
+        "ResponseBase64":  "",
+        "Error":  "Exception calling \"EndConnect\" with \"1\" argument(s): \"Ingen sådan värd är känd\""
+    },
+    {
+        "Mode":  "non_persistent",
+        "Ip":  "192.168.1.51 192.168.1.52",
+        "Command":  "hdmiOn",
+        "SentHex":  null,
+        "SentEscaped":  null,
+        "ResponseLen":  0,
+        "ResponseHex":  "",
+        "ResponseEscaped":  "",
+        "ResponseBase64":  "",
+        "Error":  "Exception calling \"EndConnect\" with \"1\" argument(s): \"Ingen sådan värd är känd\""
+    }
+]

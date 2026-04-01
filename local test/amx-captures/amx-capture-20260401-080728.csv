@@ -1,0 +1,2 @@
+﻿"Mode","Ip","Command","SentHex","SentEscaped","ResponseLen","ResponseHex","ResponseEscaped","ResponseBase64","Error"
+"persistent","127.0.0.1","<connect>",,,"0","","","","Connect timeout to 127.0.0.1:50002 after 200ms"

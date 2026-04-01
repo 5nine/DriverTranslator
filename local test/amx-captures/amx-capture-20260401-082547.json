@@ -1,0 +1,39 @@
+﻿[
+    {
+        "Mode":  "persistent_probe",
+        "Ip":  "192.168.100.17",
+        "Command":  "\u003cprobe second connection while first open\u003e",
+        "SentHex":  null,
+        "SentEscaped":  null,
+        "ResponseLen":  0,
+        "ResponseHex":  "",
+        "ResponseEscaped":  "",
+        "ResponseBase64":  "",
+        "Error":  null,
+        "SecondConnectionSucceeded":  true
+    },
+    {
+        "Mode":  "persistent",
+        "Ip":  "192.168.100.17",
+        "Command":  "set:1",
+        "SentHex":  "73 65 74 3A 31 0D",
+        "SentEscaped":  "set:1\\r",
+        "ResponseLen":  0,
+        "ResponseHex":  "",
+        "ResponseEscaped":  "",
+        "ResponseBase64":  "",
+        "Error":  null
+    },
+    {
+        "Mode":  "persistent",
+        "Ip":  "192.168.100.17",
+        "Command":  "?",
+        "SentHex":  null,
+        "SentEscaped":  null,
+        "ResponseLen":  0,
+        "ResponseHex":  "",
+        "ResponseEscaped":  "",
+        "ResponseBase64":  "",
+        "Error":  "Exception calling \"Write\" with \"3\" argument(s): \"Det gick inte att läsa data från transportanslutningen: En etablerad anslutning avbröts av programvaran i värddatorn.\""
+    }
+]

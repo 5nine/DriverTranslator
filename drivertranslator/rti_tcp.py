@@ -252,7 +252,7 @@ async def handle_client(
                                         rx_aliases=[rx_a],
                                     )
 
-                            if (not cfg.amx_dry_run) and runtime.amx_verify_after_set:
+                            if (not cfg.amx_dry_run) and runtime.amx_verify_after_set and (not runtime.amx_rx_poll_enabled):
                                 expected = str(tx_obj.amx_stream)
                                 for rx_a in rx_aliases:
                                     got = (status_by_rx.get(rx_a, {}).get("STREAM") or "").strip()

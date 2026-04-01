@@ -1,0 +1,26 @@
+﻿[
+    {
+        "Mode":  "non_persistent",
+        "Ip":  "192.168.1.50,192.168.1.51",
+        "Command":  "?,set:1,?,hdmiOff,?,hdmiOn,?",
+        "SentHex":  null,
+        "SentEscaped":  null,
+        "ResponseLen":  0,
+        "ResponseHex":  "",
+        "ResponseEscaped":  "",
+        "ResponseBase64":  "",
+        "Error":  "Exception calling \"EndConnect\" with \"1\" argument(s): \"Ingen sådan värd är känd\""
+    },
+    {
+        "Mode":  "persistent",
+        "Ip":  "192.168.1.50,192.168.1.51",
+        "Command":  "\u003cconnect\u003e",
+        "SentHex":  null,
+        "SentEscaped":  null,
+        "ResponseLen":  0,
+        "ResponseHex":  "",
+        "ResponseEscaped":  "",
+        "ResponseBase64":  "",
+        "Error":  "Exception calling \"EndConnect\" with \"1\" argument(s): \"Ingen sådan värd är känd\""
+    }
+]

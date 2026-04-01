@@ -80,7 +80,7 @@ Run as a module: `python3 -m drivertranslator` (see `__main__.py`).
 ## Matrix / routing (`protocol_helpers.py` + `matrix_amx.py`)
 
 - Lookups / matrix text: **`lookup_tx`**, **`lookup_rx`**, **`tx_alias_from_amx_stream`**, **`all_endpoint_aliases`**, **`device_status_tx_dict`**, **`device_status_rx_dict`**, **`format_matrix_info`**, **`format_tx_signal`**, **`as_success`**: `protocol_helpers.py`.
-- Routing execution: **`apply_amx_command_to_rx_aliases`**, **`handle_matrix_set`**, **`refresh_hdmi_outputs`**, **`refresh_hdmi_outputs_for_aliases`**, **`read_amx_status_fields_from_ip`**, **`refresh_tx_statuses`**, **`TxStatusPoller`**: `matrix_amx.py`.
+- Routing execution: **`apply_amx_command_to_rx_aliases`**, **`handle_matrix_set`**, **`read_amx_status_fields_from_ip`**, **`refresh_tx_statuses`**, **`refresh_rx_statuses`**, **`TxStatusPoller`**, **`RxStatusPoller`**: `matrix_amx.py`.
 - TX poll interval: **`TX_STATUS_POLL_INTERVAL_SECONDS`** in `constants.py` (used by `matrix_amx` and `http_status` HTML copy).
 
 ## NHD query stubs (`nhd_ctl_handlers.py`)

@@ -19,6 +19,7 @@ def persist_runtime_setting_to_config(*, config_path: str, key: str, value: Any)
         "amx_persistent": ("amx", "persistent"),
         "amx_verify_after_set": ("amx", "verify_after_set"),
         "amx_verify_timeout_ms": ("amx", "verify_timeout_ms"),
+        "amx_rx_poll_enabled": ("amx", "rx_poll_enabled"),
         "expanded_log": ("server", "expanded_log"),
     }
     target = mapping.get(key)
