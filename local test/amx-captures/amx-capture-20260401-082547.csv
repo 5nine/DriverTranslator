@@ -1,4 +1,0 @@
-﻿"Mode","Ip","Command","SentHex","SentEscaped","ResponseLen","ResponseHex","ResponseEscaped","ResponseBase64","Error","SecondConnectionSucceeded"
-"persistent_probe","192.168.100.17","<probe second connection while first open>",,,"0","","","",,"True"
-"persistent","192.168.100.17","set:1","73 65 74 3A 31 0D","set:1\r","0","","","",,
-"persistent","192.168.100.17","?",,,"0","","","","Exception calling ""Write"" with ""3"" argument(s): ""Det gick inte att läsa data från transportanslutningen: En etablerad anslutning avbröts av programvaran i värddatorn.""",

@@ -1,2 +1,0 @@
-﻿"Mode","Ip","Command","SentHex","SentEscaped","ResponseLen","ResponseHex","ResponseEscaped","ResponseBase64","Error"
-"persistent","192.168.1.50 192.168.1.53","<connect>",,,"0","","","","Exception calling ""EndConnect"" with ""1"" argument(s): ""Ingen sådan värd är känd"""

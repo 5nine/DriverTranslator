@@ -1,3 +1,0 @@
-﻿"Mode","Ip","Command","SentHex","SentEscaped","ResponseLen","ResponseHex","ResponseEscaped","ResponseBase64","Error"
-"non_persistent","192.168.1.50,192.168.1.51","?,set:1,?,hdmiOff,?,hdmiOn,?",,,"0","","","","Exception calling ""EndConnect"" with ""1"" argument(s): ""Ingen sådan värd är känd"""
-"persistent","192.168.1.50,192.168.1.51","<connect>",,,"0","","","","Exception calling ""EndConnect"" with ""1"" argument(s): ""Ingen sådan värd är känd"""

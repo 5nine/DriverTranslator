@@ -1,2 +1,0 @@
-﻿"Mode","Ip","Command","SentHex","SentEscaped","ResponseLen","ResponseHex","ResponseEscaped","ResponseBase64","Error"
-"persistent","192.168.200.17","<connect>",,,"0","","","","Exception calling ""EndConnect"" with ""1"" argument(s): ""En socketåtgärd försökte utföras på en oåtkomlig värd 192.168.200.17:50002"""

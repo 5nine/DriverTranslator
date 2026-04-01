@@ -25,6 +25,7 @@ Thumbs.db
 
 # Local scratch files, captures, and notes (not committed)
 untracked/
+local test/
 
 # Root-level PDFs (reference docs; keep copies in untracked/ locally)
 /*.pdf
