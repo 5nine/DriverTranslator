@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from .amx_client import AmxClient, DryRunAmxClient, PersistentAmxClient
+from .amx_client import AmxClient, DryRunAmxClient
 from .amx_self_test import amx_self_test
 from .http_status import handle_http_client
 from .matrix_amx import RxStatusPoller, TxStatusPoller, refresh_rx_statuses, refresh_tx_statuses
@@ -52,21 +52,9 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
             decoder_port=cfg.amx_decoder_port,
             offline_decoders=cfg.amx_dry_run_offline_decoders,
         )
-    elif cfg.amx_persistent:
-        LOG.warning("AMX persistent mode enabled: keeping per-decoder sockets open.")
-        amx = PersistentAmxClient(
-            decoder_port=cfg.amx_decoder_port,
-            connect_timeout_ms=cfg.amx_connect_timeout_ms,
-            command_timeout_ms=cfg.amx_command_timeout_ms,
-            keepalive_seconds=cfg.amx_keepalive_seconds,
-            bind_address=cfg.amx_bind_address,
-            set_queue_limit=cfg.amx_set_queue_limit,
-            set_retry_attempts=cfg.amx_set_retry_attempts,
-            set_retry_backoff_initial_ms=cfg.amx_set_retry_backoff_initial_ms,
-            set_retry_backoff_max_ms=cfg.amx_set_retry_backoff_max_ms,
-            expanded_log=cfg.expanded_log,
-        )
     else:
+        if cfg.amx_persistent:
+            LOG.warning("Config has amx.persistent=true, but persistent mode is disabled; using non-persistent AMX client.")
         amx = AmxClient(
             decoder_port=cfg.amx_decoder_port,
             connect_timeout_ms=cfg.amx_connect_timeout_ms,

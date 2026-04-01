@@ -189,7 +189,8 @@ class RuntimeSettings:
     def __init__(self, cfg: Config) -> None:
         self._lock = asyncio.Lock()
         self.amx_dry_run: bool = cfg.amx_dry_run
-        self.amx_persistent: bool = cfg.amx_persistent
+        # Persistent mode is intentionally disabled; keep runtime value pinned false.
+        self.amx_persistent: bool = False
         self.amx_verify_after_set: bool = cfg.amx_verify_after_set
         self.amx_verify_timeout_ms: int = cfg.amx_verify_timeout_ms
         self.amx_self_test_on_start: bool = cfg.amx_self_test_on_start
@@ -215,7 +216,8 @@ class RuntimeSettings:
             if key == "amx_dry_run":
                 self.amx_dry_run = value
             elif key == "amx_persistent":
-                self.amx_persistent = value
+                # Persistent mode is intentionally disabled; ignore requested value.
+                self.amx_persistent = False
             elif key == "amx_verify_after_set":
                 self.amx_verify_after_set = value
             elif key == "amx_self_test_on_start":

@@ -379,7 +379,7 @@ async def handle_http_client(
                         value,
                     )
                     bad_msg = (
-                        "Expected key amx_dry_run, amx_persistent, amx_verify_after_set, amx_rx_poll_enabled, or expanded_log with true/false, "
+                        "Expected key amx_dry_run, amx_verify_after_set, amx_rx_poll_enabled, or expanded_log with true/false, "
                         "or amx_verify_timeout_ms with a number (100-5000)."
                     )
                     if want_html:
@@ -411,10 +411,9 @@ async def handle_http_client(
                             "Saved to config. Restart DriverTranslator to apply this mode change.",
                         ]
                     elif key == "amx_persistent":
-                        v = snap.get("amx_persistent")
                         paras = [
-                            f"amx_persistent is now {str(v).lower()} ({'persistent' if v else 'non-persistent connect-close'} mode).",
-                            "Saved to config. Restart DriverTranslator to apply this mode change.",
+                            "amx_persistent is disabled in this build; non-persistent mode is always used.",
+                            "Saved value is forced to false.",
                         ]
                     elif key == "amx_verify_after_set":
                         v = snap.get("amx_verify_after_set")
@@ -1466,13 +1465,6 @@ async def handle_http_client(
       </div>
     </div>
     <div class="row">
-      <div><b>AMX persistent mode</b><span class="help-icon" title="When ON, keep a socket open per decoder. When OFF, use connect-close per command. Saved to config; restart required to apply.">?</span></div>
-      <div class="ctrl-actions">
-        <code id="st_amx_persistent">{str(rt.get('amx_persistent', cfg.amx_persistent)).lower()}</code>
-        <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="amx_persistent" data-value="{'false' if rt.get('amx_persistent', cfg.amx_persistent) else 'true'}">Toggle</button>
-      </div>
-    </div>
-    <div class="row">
       <div><b>AMX verify after switch</b><span class="help-icon" title="When ON, after each route the translator asks each affected decoder for STREAM via AMX and logs mismatches locally. RTI still gets an immediate matrix ack. This verify step is automatically inactive while AMX RX polling is ON.">?</span></div>
       <div class="ctrl-actions">
         <code id="st_amx_verify">{str(rt['amx_verify_after_set']).lower()}{' (inactive: RX polling on)' if (rt.get('amx_rx_poll_enabled', True) and rt['amx_verify_after_set']) else ''}</code>
@@ -1689,7 +1681,7 @@ async def handle_http_client(
         if (key === 'amx_dry_run')
           return 'AMX dry-run mode is now ' + String(j.amx_dry_run).toLowerCase() + '. Saved to config; restart DriverTranslator to apply.';
         if (key === 'amx_persistent')
-          return 'AMX persistent mode is now ' + String(j.amx_persistent).toLowerCase() + '. Saved to config; restart DriverTranslator to apply.';
+          return 'AMX persistent mode is disabled in this build. Non-persistent mode remains active.';
         if (key === 'amx_verify_timeout_ms')
           return 'Verify timeout is now ' + j.amx_verify_timeout_ms + ' ms. Applies immediately; no restart.';
         if (key === 'amx_verify_after_set')
@@ -1747,11 +1739,6 @@ async def handle_http_client(
                 const el = document.getElementById('st_amx_dry_run');
                 if (el) el.textContent = String(j.amx_dry_run).toLowerCase();
                 btn.setAttribute('data-value', j.amx_dry_run ? 'false' : 'true');
-              }}
-              if (key === 'amx_persistent') {{
-                const el = document.getElementById('st_amx_persistent');
-                if (el) el.textContent = String(j.amx_persistent).toLowerCase();
-                btn.setAttribute('data-value', j.amx_persistent ? 'false' : 'true');
               }}
               if (key === 'expanded_log') {{
                 const el = document.getElementById('st_expanded_log');
