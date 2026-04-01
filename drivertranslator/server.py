@@ -129,37 +129,34 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
                 )
         except Exception:
             LOG.exception("Startup AMX self-test failed")
+
+    async def _prime_amx_status_once() -> None:
+        # One-time startup status prime keeps the page accurate even when periodic pollers are disabled.
+        if cfg.amx_dry_run:
+            return
         try:
-            # Prime TX status on startup when TX polling is enabled.
-            if runtime.amx_tx_poll_enabled:
-                await refresh_tx_statuses(cfg=cfg, state=state, runtime=runtime)
-                offline_txs = sorted(
-                    [
-                        tx_alias
-                        for tx_alias in cfg.tx_by_alias.keys()
-                        if tx_alias not in cfg.tx_skipped_aliases and not state.tx_online.get(tx_alias, False)
-                    ],
-                    key=tx_alias_sort_key,
+            await refresh_tx_statuses(cfg=cfg, state=state, runtime=runtime)
+            offline_txs = sorted(
+                [
+                    tx_alias
+                    for tx_alias in cfg.tx_by_alias.keys()
+                    if tx_alias not in cfg.tx_skipped_aliases and not state.tx_online.get(tx_alias, False)
+                ],
+                key=tx_alias_sort_key,
+            )
+            if offline_txs:
+                await notifier.problem(
+                    "amx.txstatus.startup",
+                    f"DT: ERROR AMX TX startup status poll: {len(offline_txs)}/{max(1, len(cfg.tx_by_alias) - len(cfg.tx_skipped_aliases))} offline. "
+                    + ", ".join(offline_txs[:5])
+                    + (" ..." if len(offline_txs) > 5 else ""),
                 )
-                if offline_txs:
-                    await notifier.problem(
-                        "amx.txstatus.startup",
-                        f"DT: ERROR AMX TX startup status poll: {len(offline_txs)}/{max(1, len(cfg.tx_by_alias) - len(cfg.tx_skipped_aliases))} offline. "
-                        + ", ".join(offline_txs[:5])
-                        + (" ..." if len(offline_txs) > 5 else ""),
-                    )
         except Exception:
             LOG.exception("Startup AMX TX status poll failed")
         try:
-            if runtime.amx_rx_poll_enabled:
-                await refresh_rx_statuses(cfg=cfg, state=state, runtime=runtime)
+            await refresh_rx_statuses(cfg=cfg, state=state, runtime=runtime)
         except Exception:
             LOG.exception("Startup AMX RX status poll failed")
-
-    tx_poller = TxStatusPoller(cfg=cfg, state=state, runtime=runtime)
-    await tx_poller.start()
-    rx_poller = RxStatusPoller(cfg=cfg, state=state, runtime=runtime)
-    await rx_poller.start()
 
     if cfg.http_status_enabled:
         http_server = await asyncio.start_server(
@@ -192,9 +189,17 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
     addrs = ", ".join(str(sock.getsockname()) for sock in (server.sockets or []))
     LOG.info("Listening on %s", addrs)
 
+    tx_poller = TxStatusPoller(cfg=cfg, state=state, runtime=runtime)
+    rx_poller = RxStatusPoller(cfg=cfg, state=state, runtime=runtime)
+    # Start pollers after listeners are up so UI/RTI sockets become available first.
+    asyncio.create_task(tx_poller.start())
+    asyncio.create_task(rx_poller.start())
+
     # Optional AMX self-test on startup (problems-only notification), non-blocking.
     if cfg.amx_self_test_on_start:
         asyncio.create_task(_run_startup_self_test())
+    # Always run one status prime in live mode; periodic TX/RX polling toggles still control ongoing loops.
+    asyncio.create_task(_prime_amx_status_once())
 
     async with server:
         await server.serve_forever()
