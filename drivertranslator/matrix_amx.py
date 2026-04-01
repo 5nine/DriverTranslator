@@ -271,6 +271,8 @@ async def refresh_rx_statuses(*, cfg: Config, state: ControllerState, runtime: R
                 timeout_ms=timeout_ms,
                 local_addr=local_addr,
                 expanded_log=runtime.expanded_log,
+                log_payload=False,
+                log_errors=True,
             )
         )
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -320,6 +322,8 @@ async def read_amx_status_fields_from_ip(
     timeout_ms: int,
     local_addr: Optional[Tuple[str, int]],
     expanded_log: bool,
+    log_payload: bool = True,
+    log_errors: bool = False,
 ) -> Dict[str, str]:
     reader: Optional[asyncio.StreamReader] = None
     writer: Optional[asyncio.StreamWriter] = None
@@ -333,8 +337,18 @@ async def read_amx_status_fields_from_ip(
         writer.write(b"?\r")
         await writer.drain()
         data = await asyncio.wait_for(reader.read(4096), timeout=max(0.2, timeout_ms / 1000))
-        log_amx_inbound(enabled=expanded_log, decoder_ip=host, decoder_port=port, data=data)
+        log_amx_inbound(
+            enabled=expanded_log,
+            decoder_ip=host,
+            decoder_port=port,
+            data=data,
+            log_payload=log_payload,
+        )
         return parse_amx_status(data)
+    except Exception as e:
+        if log_errors:
+            LOG.warning("AMX status poll failed for %s:%d: %s", host, port, e)
+        raise
     finally:
         if writer is not None:
             writer.close()
@@ -381,6 +395,8 @@ async def refresh_tx_statuses(*, cfg: Config, state: ControllerState, runtime: R
                 timeout_ms=timeout_ms,
                 local_addr=local_addr,
                 expanded_log=runtime.expanded_log,
+                log_payload=False,
+                log_errors=True,
             )
         )
 

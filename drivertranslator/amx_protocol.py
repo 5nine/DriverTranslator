@@ -26,8 +26,17 @@ def parse_amx_status(data: bytes) -> Dict[str, str]:
     return out
 
 
-def log_amx_inbound(*, enabled: bool, decoder_ip: str, decoder_port: int, data: bytes) -> None:
+def log_amx_inbound(
+    *,
+    enabled: bool,
+    decoder_ip: str,
+    decoder_port: int,
+    data: bytes,
+    log_payload: bool = True,
+) -> None:
     if not enabled:
+        return
+    if not log_payload:
         return
     if not data:
         LOG.info("AMX <- %s:%d <empty>", decoder_ip, decoder_port)
