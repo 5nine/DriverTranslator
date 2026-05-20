@@ -47,6 +47,7 @@ from .models import (
     RuntimeSettings,
 )
 from .problem_reporter import LocalProblemReporter
+from .rti_status import RtiStatusReporter
 from .protocol_helpers import format_tx_signal
 from .system_control import do_reboot, do_service_restart
 from .unknown_ctl import (
@@ -77,6 +78,7 @@ async def handle_http_client(
     config_path: str,
     amx_self_test: Callable[..., Awaitable[Dict[str, Any]]],
     notifier: LocalProblemReporter,
+    status_reporter: Optional[RtiStatusReporter] = None,
 ) -> None:
     try:
         try:
@@ -379,7 +381,7 @@ async def handle_http_client(
                         value,
                     )
                     bad_msg = (
-                        "Expected key amx_dry_run, amx_verify_after_set, amx_tx_poll_enabled, amx_rx_poll_enabled, or expanded_log with true/false, "
+                        "Expected key amx_dry_run, amx_verify_after_set, amx_tx_poll_enabled, amx_rx_poll_enabled, rti_status_enabled, or expanded_log with true/false, "
                         "or amx_verify_timeout_ms with a number (100-5000)."
                     )
                     if want_html:
@@ -439,6 +441,12 @@ async def handle_http_client(
                             f"amx_tx_poll_enabled is now {str(v).lower()} (polls TX getStatus every {TX_STATUS_POLL_INTERVAL_SECONDS}s).",
                             "Takes effect immediately; no service restart needed.",
                         ]
+                    elif key == "rti_status_enabled":
+                        v = snap.get("rti_status_enabled")
+                        paras = [
+                            f"rti_status_enabled is now {str(v).lower()} (TCP per-device status to RTI Two Way Strings).",
+                            "Takes effect immediately; no service restart needed.",
+                        ]
                     else:
                         paras = [
                             f"Updated setting {key!r}.",
@@ -458,6 +466,7 @@ async def handle_http_client(
                                     "amx_verify_after_set": snap.get("amx_verify_after_set"),
                                     "amx_tx_poll_enabled": snap.get("amx_tx_poll_enabled"),
                                     "amx_rx_poll_enabled": snap.get("amx_rx_poll_enabled"),
+                                    "rti_status_enabled": snap.get("rti_status_enabled"),
                                     "amx_verify_timeout_ms": snap.get("amx_verify_timeout_ms"),
                                     "expanded_log": snap.get("expanded_log"),
                                 },
@@ -643,6 +652,7 @@ async def handle_http_client(
                     rt["amx_verify_timeout_ms"],
                     runtime,
                     notifier,
+                    status_reporter,
                 )
                 failed_rx = {f[0] for f in outcome.failures}
                 http_ok = (
@@ -1518,6 +1528,13 @@ async def handle_http_client(
         <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="amx_rx_poll_enabled" data-value="{'false' if rt.get('amx_rx_poll_enabled', True) else 'true'}">Toggle</button>
       </div>
     </div>
+    <div class="row">
+      <div><b>RTI status telemetry</b><span class="help-icon" title="When ON, sends per-TX/RX status lines over a persistent TCP connection to the RTI Two Way Strings port (rti_status host/port). Runtime only if host/port are configured.">?</span></div>
+      <div class="ctrl-actions">
+        <code id="st_rti_status">{str(rt.get('rti_status_enabled', False)).lower()}</code>
+        <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="rti_status_enabled" data-value="{'false' if rt.get('rti_status_enabled', False) else 'true'}">Toggle</button>
+      </div>
+    </div>
     <div class="row row-system-size">
       <div class="system-size-heading"><b>System size (TX/RX + starting IPs)</b><span class="help-icon" title="Regenerates endpoints.tx/endpoints.rx using installer naming and sequential IPs. TX uses INn-BOXn, stream=n, hostname NHD-120-TX-000...n. RX uses OUTn-TVn, hostname NHD-120-RX-000...(100+n), and amx_decoder_ip = RX IP. Saved to config; restart required.">?</span></div>
       <div class="system-size-grid">
@@ -1717,6 +1734,8 @@ async def handle_http_client(
           return 'AMX TX polling is now ' + String(j.amx_tx_poll_enabled).toLowerCase() + '. Applies immediately.';
         if (key === 'amx_rx_poll_enabled')
           return 'AMX RX polling is now ' + String(j.amx_rx_poll_enabled).toLowerCase() + '. Applies immediately' + (j.amx_rx_poll_enabled && j.amx_verify_after_set ? '; route verify is currently inactive.' : '.');
+        if (key === 'rti_status_enabled')
+          return 'RTI status telemetry is now ' + String(j.rti_status_enabled).toLowerCase() + '. Applies immediately.';
         return 'Setting updated. Applies immediately.';
       }}
 
@@ -1782,6 +1801,11 @@ async def handle_http_client(
                 const el = document.getElementById('st_amx_tx_poll');
                 if (el) el.textContent = String(j.amx_tx_poll_enabled).toLowerCase();
                 btn.setAttribute('data-value', j.amx_tx_poll_enabled ? 'false' : 'true');
+              }}
+              if (key === 'rti_status_enabled') {{
+                const el = document.getElementById('st_rti_status');
+                if (el) el.textContent = String(j.rti_status_enabled).toLowerCase();
+                btn.setAttribute('data-value', j.rti_status_enabled ? 'false' : 'true');
               }}
               return msg;
             }});

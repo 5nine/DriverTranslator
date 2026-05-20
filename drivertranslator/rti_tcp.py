@@ -10,6 +10,7 @@ from .models import Config, ControllerState, HealthState, NhdCtlSession, Runtime
 from .nhd_ctl_handlers import handle_config_get, handle_multiview_get, handle_videowall_get
 from .networking import crlf_line
 from .problem_reporter import LocalProblemReporter
+from .rti_status import RtiStatusReporter
 from .protocol_helpers import (
     as_success,
     format_matrix_info,
@@ -28,6 +29,7 @@ async def handle_client(
     notifier: LocalProblemReporter,
     health: HealthState,
     runtime: RuntimeSettings,
+    status_reporter: Optional[RtiStatusReporter],
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
 ) -> None:
@@ -177,6 +179,7 @@ async def handle_client(
                     runtime.amx_verify_timeout_ms,
                     runtime,
                     notifier,
+                    status_reporter,
                 )
                 _write_rti_line(outcome.rti_response)
                 await writer.drain()

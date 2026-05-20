@@ -16,6 +16,7 @@ from .constants import RX_STATUS_POLL_INTERVAL_SECONDS, TX_STATUS_POLL_INTERVAL_
 from .models import Config, ControllerState, RuntimeSettings, Rx
 from .networking import open_connection
 from .problem_reporter import LocalProblemReporter
+from .rti_status import RtiStatusReporter
 from .protocol_helpers import lookup_rx, lookup_tx, tx_alias_from_amx_stream
 from .utils import rx_alias_sort_key, tx_alias_sort_key
 
@@ -54,12 +55,14 @@ async def apply_amx_command_to_rx_aliases(
                 state.set_rx_online(a, False)
                 state.set_rx_hdmi_output(a, None)
                 state.set_rx_hdmi_link(a, None)
+                state.set_rx_status_fields(a, {})
             else:
                 state.set_rx_online(a, True)
                 fields = res if isinstance(res, dict) else {}
                 status_by_rx[a] = fields
                 state.set_rx_hdmi_output(a, hdmi_enabled_from_status_fields(fields))
                 state.set_rx_hdmi_link(a, hdmi_link_connected_from_status_fields(fields))
+                state.set_rx_status_fields(a, fields)
         return failures, status_by_rx
 
     if hasattr(amx, "send_command"):
@@ -147,6 +150,7 @@ async def process_matrix_set_line(
     timeout_ms: int,
     runtime: RuntimeSettings,
     notifier: LocalProblemReporter,
+    status_reporter: Optional[RtiStatusReporter] = None,
 ) -> MatrixSetLineResult:
     """
     Run AMX routing and ControllerState updates for a primary matrix set line.
@@ -250,6 +254,9 @@ async def process_matrix_set_line(
         except Exception:
             pass
 
+    if ok and status_reporter is not None:
+        status_reporter.schedule_push()
+
     return MatrixSetLineResult(
         rti_ok=ok,
         rti_response=resp if ok else "unknown command",
@@ -258,7 +265,13 @@ async def process_matrix_set_line(
     )
 
 
-async def refresh_rx_statuses(*, cfg: Config, state: ControllerState, runtime: RuntimeSettings) -> None:
+async def refresh_rx_statuses(
+    *,
+    cfg: Config,
+    state: ControllerState,
+    runtime: RuntimeSettings,
+    status_reporter: Optional[RtiStatusReporter] = None,
+) -> None:
     rx_aliases = sorted(
         [a for a in cfg.rx_by_alias.keys() if a not in cfg.rx_skipped_aliases],
         key=rx_alias_sort_key,
@@ -288,28 +301,45 @@ async def refresh_rx_statuses(*, cfg: Config, state: ControllerState, runtime: R
             state.set_rx_online(rx_alias, False)
             state.set_rx_hdmi_output(rx_alias, None)
             state.set_rx_hdmi_link(rx_alias, None)
+            state.set_rx_status_fields(rx_alias, {})
             continue
         fields = res if isinstance(res, dict) else {}
         state.set_rx_online(rx_alias, bool(fields))
         state.set_rx_hdmi_output(rx_alias, hdmi_enabled_from_status_fields(fields))
         state.set_rx_hdmi_link(rx_alias, hdmi_link_connected_from_status_fields(fields))
+        state.set_rx_status_fields(rx_alias, fields)
         stream_reported = (fields.get("STREAM") or "").strip()
         if stream_reported:
             amx_tx_alias = tx_alias_from_amx_stream(cfg, stream_reported)
             if amx_tx_alias is not None:
                 state.set_breakaway(kind="video", tx_alias=amx_tx_alias, rx_aliases=[rx_alias])
+    if status_reporter is not None:
+        status_reporter.schedule_push()
 
 
 class RxStatusPoller:
-    def __init__(self, *, cfg: Config, state: ControllerState, runtime: RuntimeSettings) -> None:
+    def __init__(
+        self,
+        *,
+        cfg: Config,
+        state: ControllerState,
+        runtime: RuntimeSettings,
+        status_reporter: Optional[RtiStatusReporter] = None,
+    ) -> None:
         self._cfg = cfg
         self._state = state
         self._runtime = runtime
+        self._status_reporter = status_reporter
         self._task: Optional[asyncio.Task[None]] = None
 
     async def start(self) -> None:
         if self._runtime.amx_rx_poll_enabled:
-            await refresh_rx_statuses(cfg=self._cfg, state=self._state, runtime=self._runtime)
+            await refresh_rx_statuses(
+                cfg=self._cfg,
+                state=self._state,
+                runtime=self._runtime,
+                status_reporter=self._status_reporter,
+            )
         self._task = asyncio.create_task(self._loop(), name="dt-rx-status-poller")
 
     async def _loop(self) -> None:
@@ -318,7 +348,12 @@ class RxStatusPoller:
             if not self._runtime.amx_rx_poll_enabled:
                 continue
             try:
-                await refresh_rx_statuses(cfg=self._cfg, state=self._state, runtime=self._runtime)
+                await refresh_rx_statuses(
+                    cfg=self._cfg,
+                    state=self._state,
+                    runtime=self._runtime,
+                    status_reporter=self._status_reporter,
+                )
             except Exception:
                 LOG.exception("RX status poll failed")
 
@@ -365,7 +400,13 @@ async def read_amx_status_fields_from_ip(
                 await writer.wait_closed()
 
 
-async def refresh_tx_statuses(*, cfg: Config, state: ControllerState, runtime: RuntimeSettings) -> None:
+async def refresh_tx_statuses(
+    *,
+    cfg: Config,
+    state: ControllerState,
+    runtime: RuntimeSettings,
+    status_reporter: Optional[RtiStatusReporter] = None,
+) -> None:
     tx_aliases = sorted(
         [a for a in cfg.tx_by_alias.keys() if a not in cfg.tx_skipped_aliases],
         key=tx_alias_sort_key,
@@ -428,18 +469,33 @@ async def refresh_tx_statuses(*, cfg: Config, state: ControllerState, runtime: R
             fields = res if isinstance(res, dict) else {}
             state.set_tx_online(tx_alias, bool(fields))
             state.set_tx_status_fields(tx_alias, fields)
+    if status_reporter is not None:
+        status_reporter.schedule_push()
 
 
 class TxStatusPoller:
-    def __init__(self, *, cfg: Config, state: ControllerState, runtime: RuntimeSettings) -> None:
+    def __init__(
+        self,
+        *,
+        cfg: Config,
+        state: ControllerState,
+        runtime: RuntimeSettings,
+        status_reporter: Optional[RtiStatusReporter] = None,
+    ) -> None:
         self._cfg = cfg
         self._state = state
         self._runtime = runtime
+        self._status_reporter = status_reporter
         self._task: Optional[asyncio.Task[None]] = None
 
     async def start(self) -> None:
         if self._runtime.amx_tx_poll_enabled:
-            await refresh_tx_statuses(cfg=self._cfg, state=self._state, runtime=self._runtime)
+            await refresh_tx_statuses(
+                cfg=self._cfg,
+                state=self._state,
+                runtime=self._runtime,
+                status_reporter=self._status_reporter,
+            )
         self._task = asyncio.create_task(self._loop(), name="dt-tx-status-poller")
 
     async def _loop(self) -> None:
@@ -448,6 +504,11 @@ class TxStatusPoller:
             if not self._runtime.amx_tx_poll_enabled:
                 continue
             try:
-                await refresh_tx_statuses(cfg=self._cfg, state=self._state, runtime=self._runtime)
+                await refresh_tx_statuses(
+                    cfg=self._cfg,
+                    state=self._state,
+                    runtime=self._runtime,
+                    status_reporter=self._status_reporter,
+                )
             except Exception:
                 LOG.exception("TX status poll failed")

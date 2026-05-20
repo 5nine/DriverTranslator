@@ -16,6 +16,7 @@ Purpose: quick map of **where code lives** after the `main.py` split. For behavi
 | Shared constants | `constants.py` (e.g. `TX_STATUS_POLL_INTERVAL_SECONDS`) |
 | Decoder reachability self-test | `amx_self_test.py` (`amx_self_test`) |
 | UDP reboot listener | `rti_control_udp.py` (`RtiControlUdp`) |
+| RTI Two Way Strings status (per TX/RX) | `rti_status.py` (`RtiStatusReporter`), `rti_telemetry.py` (`RtiTwoWayTransport`) |
 | Config load/validate | `config_loader.py` |
 | JSON config edits (UI / persistence) | `config_persistence.py` |
 | Unknown-command tracking | `unknown_ctl.py` |

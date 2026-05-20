@@ -73,6 +73,13 @@ class Config:
     http_status_log_lines: int
     http_status_control_token: Optional[str]
     http_status_password: str
+    rti_status_enabled: bool
+    rti_status_protocol: str
+    rti_status_host: Optional[str]
+    rti_status_port: int
+    rti_status_bind_address: Optional[str]
+    rti_status_interval_seconds: int
+    rti_status_on_change: bool
     rti_control_enabled: bool
     rti_control_bind_address: Optional[str]
     rti_control_port: int
@@ -114,6 +121,7 @@ class ControllerState:
         self.rx_hdmi_output: Dict[str, Optional[bool]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
         # Best-effort HDMI sink link state from AMX status (True=connected, False=disconnected, None=unknown).
         self.rx_hdmi_link: Dict[str, Optional[bool]] = {rx.alias: None for rx in cfg.rx_by_alias.values()}
+        self.rx_status_fields: Dict[str, Dict[str, str]] = {rx.alias: {} for rx in cfg.rx_by_alias.values()}
         # TX online defaults: optimistic in dry-run, conservative in live mode until first status read.
         self.tx_online: Dict[str, bool] = {
             tx.alias: bool(cfg.amx_dry_run) for tx in cfg.tx_by_alias.values()
@@ -131,6 +139,10 @@ class ControllerState:
     def set_rx_hdmi_link(self, rx_alias: str, connected: Optional[bool]) -> None:
         if rx_alias in self.rx_hdmi_link:
             self.rx_hdmi_link[rx_alias] = connected
+
+    def set_rx_status_fields(self, rx_alias: str, fields: Dict[str, str]) -> None:
+        if rx_alias in self.rx_status_fields:
+            self.rx_status_fields[rx_alias] = dict(fields)
 
     def set_tx_online(self, tx_alias: str, online: bool) -> None:
         if tx_alias in self.tx_online:
@@ -205,6 +217,7 @@ class RuntimeSettings:
         self.amx_self_test_on_start: bool = cfg.amx_self_test_on_start
         self.amx_tx_poll_enabled: bool = cfg.amx_tx_poll_enabled
         self.amx_rx_poll_enabled: bool = cfg.amx_rx_poll_enabled
+        self.rti_status_enabled: bool = cfg.rti_status_enabled
         self.expanded_log: bool = cfg.expanded_log
         self.http_log_lines: int = cfg.http_status_log_lines
 
@@ -218,6 +231,7 @@ class RuntimeSettings:
                 "amx_self_test_on_start": self.amx_self_test_on_start,
                 "amx_tx_poll_enabled": self.amx_tx_poll_enabled,
                 "amx_rx_poll_enabled": self.amx_rx_poll_enabled,
+                "rti_status_enabled": self.rti_status_enabled,
                 "expanded_log": self.expanded_log,
                 "http_log_lines": self.http_log_lines,
             }
@@ -237,6 +251,8 @@ class RuntimeSettings:
                 self.amx_rx_poll_enabled = value
             elif key == "amx_tx_poll_enabled":
                 self.amx_tx_poll_enabled = value
+            elif key == "rti_status_enabled":
+                self.rti_status_enabled = value
             elif key == "expanded_log":
                 self.expanded_log = value
             else:

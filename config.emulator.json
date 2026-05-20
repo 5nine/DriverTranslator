@@ -74,6 +74,14 @@
   },
   "server": {
     "expanded_log": false
+  },
+  "rti_status": {
+    "enabled": false,
+    "protocol": "tcp",
+    "host": null,
+    "port": 0,
+    "interval_seconds": 30,
+    "on_change": true
   }
 }
 

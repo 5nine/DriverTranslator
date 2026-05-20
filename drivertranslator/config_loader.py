@@ -66,6 +66,7 @@ def load_config(path: str) -> Config:
     amx = raw.get("amx", {})
     server = raw.get("server", {})
     http_status = raw.get("http_status", {})
+    rti_status = raw.get("rti_status", {})
     rti_control = raw.get("rti_control", {})
     unknown_ctl = raw.get("unknown_ctl") if isinstance(raw.get("unknown_ctl"), dict) else {}
     uc_pp = unknown_ctl.get("persist_path")
@@ -115,6 +116,13 @@ def load_config(path: str) -> Config:
         http_status_log_lines=as_int(http_status.get("log_lines"), default=200),
         http_status_control_token=opt_str(http_status.get("control_token")),
         http_status_password=str(http_status.get("password", "1234")),
+        rti_status_enabled=as_bool(rti_status.get("enabled"), default=False),
+        rti_status_protocol=str(rti_status.get("protocol", "tcp")).strip().lower() or "tcp",
+        rti_status_host=bind_addr(rti_status.get("host")),
+        rti_status_port=as_int(rti_status.get("port"), default=0),
+        rti_status_bind_address=bind_addr(rti_status.get("bind_address")),
+        rti_status_interval_seconds=clamp_int(rti_status.get("interval_seconds"), default=30, min_v=5, max_v=3600),
+        rti_status_on_change=as_bool(rti_status.get("on_change"), default=True),
         rti_control_enabled=as_bool(rti_control.get("enabled"), default=False),
         rti_control_bind_address=bind_addr(rti_control.get("bind_address")),
         rti_control_port=as_int(rti_control.get("port"), default=0),
@@ -151,6 +159,9 @@ def validate_config(cfg: Config) -> None:
 
     if cfg.http_status_port <= 0 or cfg.http_status_port > 65535:
         errors.append(f"Invalid http_status.port: {cfg.http_status_port}")
+
+    if cfg.rti_status_enabled and (not cfg.rti_status_host or cfg.rti_status_port <= 0):
+        warnings.append("rti_status.enabled=true but host/port is missing; telemetry will not be sent.")
 
     if warnings:
         for w in warnings:

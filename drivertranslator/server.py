@@ -13,7 +13,9 @@ from .matrix_amx import RxStatusPoller, TxStatusPoller, refresh_rx_statuses, ref
 from .models import Config, ControllerState, HealthState, ProblemState, RuntimeSettings
 from .problem_reporter import LocalProblemReporter
 from .rti_control_udp import RtiControlUdp
+from .rti_status import RtiStatusReporter
 from .rti_tcp import handle_client
+from .rti_telemetry import RtiTwoWayTransport, handle_inbound_twoway_line
 from .unknown_ctl import configure as unknown_ctl_configure, load_from_disk as unknown_ctl_load_from_disk
 from .utils import tx_alias_sort_key
 
@@ -80,6 +82,16 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
                     continue
                 state.set_rx_all_media(rx_alias=rx.alias, tx_alias=tx_stream1_alias)
                 state.set_rx_hdmi_output(rx.alias, True)
+                state.set_rx_hdmi_link(rx.alias, True)
+                state.set_rx_status_fields(
+                    rx.alias,
+                    {
+                        "HDMISTATUS": "connected",
+                        "HDMIOFF": "off",
+                        "INPUTRES": "1920x1080",
+                        "STREAM": "1",
+                    },
+                )
             LOG.info(
                 "Dry-run startup seed: set all RX routes to %s (amx_stream=1), HDMI output ON",
                 tx_stream1_alias,
@@ -109,6 +121,34 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
     )
     notifier.attach_problem_state(problems)
 
+    rti_status_sender = RtiTwoWayTransport(
+        enabled=cfg.rti_status_enabled,
+        protocol=cfg.rti_status_protocol,
+        host=cfg.rti_status_host,
+        port=cfg.rti_status_port,
+        bind_address=cfg.rti_status_bind_address,
+        on_inbound_line=handle_inbound_twoway_line,
+        runtime=runtime,
+    )
+    rti_status = RtiStatusReporter(
+        cfg=cfg,
+        state=state,
+        health=health,
+        runtime=runtime,
+        sender=rti_status_sender,
+        interval_seconds=cfg.rti_status_interval_seconds,
+        on_change=cfg.rti_status_on_change,
+    )
+    await rti_status.start()
+    if cfg.rti_status_enabled and cfg.rti_status_host and cfg.rti_status_port > 0:
+        LOG.info(
+            "RTI status telemetry enabled (%s %s:%d, interval=%ds)",
+            cfg.rti_status_protocol.upper(),
+            cfg.rti_status_host,
+            cfg.rti_status_port,
+            cfg.rti_status_interval_seconds,
+        )
+
     async def _run_startup_self_test() -> None:
         # Run in background so web/RTI listeners come up immediately.
         try:
@@ -135,7 +175,7 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         if cfg.amx_dry_run:
             return
         try:
-            await refresh_tx_statuses(cfg=cfg, state=state, runtime=runtime)
+            await refresh_tx_statuses(cfg=cfg, state=state, runtime=runtime, status_reporter=rti_status)
             offline_txs = sorted(
                 [
                     tx_alias
@@ -154,9 +194,10 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         except Exception:
             LOG.exception("Startup AMX TX status poll failed")
         try:
-            await refresh_rx_statuses(cfg=cfg, state=state, runtime=runtime)
+            await refresh_rx_statuses(cfg=cfg, state=state, runtime=runtime, status_reporter=rti_status)
         except Exception:
             LOG.exception("Startup AMX RX status poll failed")
+        rti_status.schedule_push(force=True)
 
     if cfg.http_status_enabled:
         http_server = await asyncio.start_server(
@@ -173,6 +214,7 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
                 config_path=config_path,
                 amx_self_test=amx_self_test,
                 notifier=notifier,
+                status_reporter=rti_status,
             ),
             host=cfg.http_status_bind,
             port=cfg.http_status_port,
@@ -181,7 +223,7 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         LOG.info("HTTP status listening on %s", addrs)
 
     server = await asyncio.start_server(
-        lambda r, w: handle_client(cfg, amx, state, notifier, health, runtime, r, w),
+        lambda r, w: handle_client(cfg, amx, state, notifier, health, runtime, rti_status, r, w),
         host=listen,
         port=port,
     )
@@ -189,8 +231,8 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
     addrs = ", ".join(str(sock.getsockname()) for sock in (server.sockets or []))
     LOG.info("Listening on %s", addrs)
 
-    tx_poller = TxStatusPoller(cfg=cfg, state=state, runtime=runtime)
-    rx_poller = RxStatusPoller(cfg=cfg, state=state, runtime=runtime)
+    tx_poller = TxStatusPoller(cfg=cfg, state=state, runtime=runtime, status_reporter=rti_status)
+    rx_poller = RxStatusPoller(cfg=cfg, state=state, runtime=runtime, status_reporter=rti_status)
     # Start pollers after listeners are up so UI/RTI sockets become available first.
     asyncio.create_task(tx_poller.start())
     asyncio.create_task(rx_poller.start())

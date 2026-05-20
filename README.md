@@ -189,13 +189,85 @@ Point the RTI WyreStorm NetworkHD “controller” connection to the DriverTrans
 - **IP**: DriverTranslator host (control NIC)
 - **Port**: `2323` (TCP)
 
-### Two Way Strings v2.7
+### Two Way Strings v2.7 (per-TX/RX status, TCP)
 
-`rti_notify` and `rti_status` telemetry were removed. Use the built-in HTTP status page for system health, logs, and controls.
+DriverTranslator pushes **per-device status** to RTI **Two Way Strings** over a **persistent TCP connection** (default). This matches RTI TCP mode (the driver's **Connection** boolean reflects link up/down) and leaves the same socket open for **future RTI → DriverTranslator command strings**.
+
+**RTI Integration Designer setup (TCP):**
+
+1. Add a **Two Way Strings** driver instance: **Network (TCP)**.
+2. Configure RTI as the **TCP server** on the control processor:
+   - **Local Port** = `rti_status.port` (example `30002`)
+   - DriverTranslator connects **to** the RTI processor IP on that port (`host` / `port` in config).
+3. **Receive strings** (match anywhere in the line; v2.7 wildcard `$$*$$`):
+   - `DTSTATUS$$*$$` — summary heartbeat
+   - `DTTX$$*$$` — any transmitter status line
+   - `DTRX$$*$$` — any receiver status line
+4. Optional **RX string variable boundaries** (prefix/suffix) to populate variables, e.g. prefix `DTRX OUT1-TV1 ` and suffix ` ROUTE=` to capture the routed TX alias. A carriage return ends variable names (DriverTranslator terminates every line with `\r\n`).
+5. **Framing**: status lines are short; extra start/stop framing is usually not required. If needed, use a single stop character such as `%0a` (line feed) per the Two Way Strings manual.
+6. **PING** in the Two Way driver is RTI **polling the device**; DriverTranslator instead **pushes** status on an interval. Do not rely on PING for TX/RX telemetry.
+
+**Inbound commands (future):** DriverTranslator already reads lines from RTI on the same TCP socket and logs them (`handle_inbound_twoway_line`). Add RTI **Transmit / Command strings** when you are ready to send commands to DriverTranslator on that link.
+
+Example `config.json`:
+
+```json
+{
+  "rti_status": {
+    "enabled": true,
+    "protocol": "tcp",
+    "host": "192.168.1.50",
+    "port": 30002,
+    "interval_seconds": 30,
+    "on_change": true
+  }
+}
+```
+
+- `protocol`: `tcp` (default) or `udp` (one-way datagrams only; RTI doc: UDP is effectively one-way)
+- `host` / `port`: RTI processor IP and the Two Way Strings **TCP listen port**
+- `interval_seconds`: full refresh of all TX/RX lines (default 30)
+- `on_change`: also send immediately when a device's status changes (AMX poll or matrix route)
+
+**Message format** (one CRLF-terminated line per message; TCP may send many lines on one connection):
+
+| Line | Example |
+|------|---------|
+| Summary | `DTSTATUS MODE=LIVE RTI_CLIENTS=1 TX_ONLINE=10/10 RX_ONLINE=38/40` |
+| TX | `DTTX IN1-BOX1 status=ok hdmi-state=connected tx-state=connected` |
+| TX | `DTTX IN2-BOX2 status=error hdmi-state=disconnected tx-state=connected` |
+| TX | `DTTX IN3-BOX3 status=error hdmi-state=no signal tx-state=connected` |
+| TX | `DTTX IN4-BOX4 status=error hdmi-state=null tx-state=disconnected` |
+| RX | `DTRX OUT1-TV1 status=ok hdmi-state=connected rx-state=connected` |
+| RX | `DTRX OUT2-TV2 status=error hdmi-state=disconnected rx-state=connected` |
+| RX | `DTRX OUT3-TV3 status=error hdmi-state=null rx-state=disconnected` |
+
+**TX fields (for RTI variables / booleans on iPad)**
+
+| Field | Values | Meaning |
+|-------|--------|---------|
+| `status` | `ok`, `error` | `error` if TX offline **or** HDMI not `connected` |
+| `hdmi-state` | `connected`, `disconnected`, `no signal`, `null` | From AMX when online; `null` when TX offline (no poll data) |
+| `tx-state` | `connected`, `disconnected` | Encoder reachable on TCP (`?` poll) |
+
+Suggested Two Way RX string per TX alias: `DTTX IN1-BOX1$$*$$` (or one wildcard line `DTTX$$*$$` for all TX).
+
+AMX encoder: `HDMIINPUT:disconnected` → `hdmi-state=disconnected`; `HDMIINPUT:connected` without valid `INPUTRES` → `hdmi-state=no signal`; valid `INPUTRES` → `hdmi-state=connected` and `status=ok`.
+
+**RX fields (same pattern as TX)**
+
+| Field | Values | Meaning |
+|-------|--------|---------|
+| `status` | `ok`, `error` | `error` if RX offline **or** sink HDMI not `connected` |
+| `hdmi-state` | `connected`, `disconnected`, `no signal`, `null` | Sink via AMX `HDMISTATUS`; `null` when RX offline |
+| `rx-state` | `connected`, `disconnected` | Decoder reachable on TCP |
+
+AMX decoder: `HDMISTATUS:connected` = TV/sink detected; `disconnected` = TV off or cable unplugged. `INPUTRES` missing while sink connected → `no signal`.
+
+The built-in HTTP status page remains available for local monitoring:
 
 - Status page: `http://<control-nic-ip>:8080/`
 - JSON status: `http://<control-nic-ip>:8080/status.json`
-- JSON logs: `http://<control-nic-ip>:8080/logs.json`
 
 #### Optional UDP control (reboot) (TX from RTI)
 
