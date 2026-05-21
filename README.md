@@ -252,7 +252,7 @@ Example `config.json`:
 
 Suggested Two Way RX string per TX alias: `DTTX IN1-BOX1$$*$$` (or one wildcard line `DTTX$$*$$` for all TX).
 
-AMX encoder: `HDMIINPUT:disconnected` → `hdmi-state=disconnected`; `HDMIINPUT:connected` without valid `INPUTRES` → `hdmi-state=no signal`; valid `INPUTRES` → `hdmi-state=connected` and `status=ok`.
+AMX encoder: `HDMIINPUT` or `DVIINPUT` `disconnected` → `hdmi-state=disconnected`; `connected` without valid `INPUTRES`/`MODE` (e.g. `INPUTRES:0x0`) → `no signal`; valid `INPUTRES` or `MODE` (e.g. `MODE:1920x1080@60`) → `hdmi-state=connected` and `status=ok`.
 
 **RX fields (same pattern as TX)**
 

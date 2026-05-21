@@ -99,7 +99,7 @@ def classify_amx_kind(fields: Dict[str, str]) -> Optional[str]:
     """
     Distinguish encoder (tx) vs decoder (rx) from AMX getStatus fields.
     """
-    hi = (fields.get("HDMIINPUT") or "").strip()
+    hi = (fields.get("HDMIINPUT") or fields.get("DVIINPUT") or "").strip()
     ho = (fields.get("HDMIOFF") or "").strip()
     if hi and ho:
         hilo = hi.lower()

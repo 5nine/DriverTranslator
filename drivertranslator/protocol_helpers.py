@@ -73,6 +73,20 @@ def _invalid_input_res(input_res: str) -> bool:
     )
 
 
+def _tx_hdmi_input_status(fields: Dict[str, str]) -> str:
+    """Encoder HDMI/DVI input link (AMX docs: HDMIINPUT; many units report DVIINPUT)."""
+    return (fields.get("HDMIINPUT") or fields.get("DVIINPUT") or "").strip().lower()
+
+
+def _tx_incoming_resolution(fields: Dict[str, str]) -> str:
+    """Valid incoming timing: INPUTRES (older API) or MODE (e.g. 1920x1080@60 on newer firmware)."""
+    for key in ("INPUTRES", "MODE"):
+        v = (fields.get(key) or "").strip()
+        if v and not _invalid_input_res(v):
+            return v
+    return ""
+
+
 def classify_rx_hdmi_sink(fields: Dict[str, str]) -> str:
     """
     Decoder HDMI sink (display/TV at HDMIOUT) from AMX getStatus.
@@ -106,38 +120,37 @@ def classify_tx_input(fields: Dict[str, str]) -> str:
     AMX encoder (TX) HDMI input state for RTI / UI.
 
     Per AMX Direct Control API (N2312/N2322 encoders):
-    - HDMIINPUT:connected    = source available
-    - HDMIINPUT:disconnected = no source (cable out / nothing detected)
-    - INPUTRES               = incoming timing when a valid signal is present
+    - HDMIINPUT or DVIINPUT:connected    = source available
+    - HDMIINPUT or DVIINPUT:disconnected = no source
+    - INPUTRES or MODE                   = incoming timing when present
 
-    NO_SIGNAL (best-effort): HDMIINPUT connected but no usable INPUTRES — often a
-    source that is plugged in but powered off or not outputting video. Verify on
-    your firmware; AMX does not document a separate \"unplugged\" vs \"no timing\" bit.
+    NO_SIGNAL: input link connected but no usable INPUTRES/MODE (e.g. INPUTRES:0x0).
     """
-    hdmi_in = (fields.get("HDMIINPUT") or "").strip().lower()
-    input_res = (fields.get("INPUTRES") or "").strip()
+    hdmi_in = _tx_hdmi_input_status(fields)
+    input_res = _tx_incoming_resolution(fields)
     if hdmi_in == "disconnected":
         return "DISCONNECTED"
     if hdmi_in == "connected":
-        if _invalid_input_res(input_res):
+        if not input_res:
             return "NO_SIGNAL"
         return "OK"
-    if input_res and not _invalid_input_res(input_res):
+    if input_res:
         return "OK"
     return "UNKNOWN"
 
 
 def format_tx_signal(fields: Dict[str, str]) -> Tuple[str, str]:
     token = classify_tx_input(fields)
-    input_res = (fields.get("INPUTRES") or "").strip()
+    input_res = _tx_incoming_resolution(fields)
     if token == "OK":
         return (f"HDMI IN: {input_res}", "ok")
     if token == "DISCONNECTED":
         return ("HDMI IN: DISCONNECTED", "bad")
     if token == "NO_SIGNAL":
         return ("HDMI IN: NO SIGNAL", "bad")
-    if input_res:
-        return (f"IN RES: {input_res}", "")
+    raw = (fields.get("INPUTRES") or fields.get("MODE") or "").strip()
+    if raw:
+        return (f"IN RES: {raw}", "")
     return ("UNKNOWN", "")
 
 
