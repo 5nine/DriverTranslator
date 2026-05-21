@@ -4,10 +4,13 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Tuple
 
-# (status, hdmi_state, tx_state) for RTI Two Way Strings TX lines
+# (status, hdmi_state, tx_state) for RTI Two Way Strings TX lines (boolean-friendly key=value)
 TxRtiFields = Tuple[str, str, str]
-# (status, hdmi_out, hdmi_link, rx_state) for RX lines — matches web Status columns
+# (status, hdmi_out, hdmi_link, rx_state) — used internally for RX fault summary only
 RxRtiFields = Tuple[str, str, str, str]
+
+# Cap fault list length so DTRXSUMMARY stays readable on panel string variables.
+_RX_SUMMARY_MAX_FAULTS = 12
 
 from .models import Config, ControllerState, HealthState, RuntimeSettings
 from .protocol_helpers import classify_tx_input
@@ -51,12 +54,46 @@ def build_rx_rti_fields(*, state: ControllerState, rx_alias: str) -> RxRtiFields
     return (status, hdmi_out, hdmi_link, rx_state)
 
 
-def format_dt_rx_line(*, state: ControllerState, rx_alias: str) -> str:
+def _rx_fault_detail(*, state: ControllerState, rx_alias: str) -> Optional[str]:
+    """Human-readable fault for one RX, or None if ok."""
     status, hdmi_out, hdmi_link, rx_state = build_rx_rti_fields(state=state, rx_alias=rx_alias)
-    return (
-        f"DTRX {rx_alias} status={status} hdmi-out={hdmi_out} hdmi-link={hdmi_link} "
-        f"rx-state={rx_state}"
-    )
+    if status == "ok":
+        return None
+    if rx_state == "disconnected":
+        return "offline"
+    parts: List[str] = []
+    if hdmi_out == "off":
+        parts.append("HDMI output off")
+    elif hdmi_out == "unknown":
+        parts.append("HDMI output unknown")
+    if hdmi_link == "disconnected":
+        parts.append("TV disconnected")
+    elif hdmi_link == "unknown":
+        parts.append("TV link unknown")
+    return ", ".join(parts) if parts else "fault"
+
+
+def format_dt_rx_summary_line(*, cfg: Config, state: ControllerState) -> str:
+    """
+    Single RTI string variable: entire message after DTRXSUMMARY is shown to the user.
+
+    No per-RX boolean mapping — only a readable summary when any RX has a problem.
+    """
+    rx_active = [a for a in cfg.rx_by_alias.keys() if a not in cfg.rx_skipped_aliases]
+    faults: List[str] = []
+    for rx_alias in sorted(rx_active, key=rx_alias_sort_key):
+        detail = _rx_fault_detail(state=state, rx_alias=rx_alias)
+        if detail:
+            faults.append(f"{rx_alias} ({detail})")
+    if not faults:
+        n = len(rx_active)
+        msg = f"All {n} RX OK"
+    else:
+        shown = faults[:_RX_SUMMARY_MAX_FAULTS]
+        msg = f"{len(faults)} RX fault(s): " + "; ".join(shown)
+        if len(faults) > _RX_SUMMARY_MAX_FAULTS:
+            msg += f"; +{len(faults) - _RX_SUMMARY_MAX_FAULTS} more"
+    return f"DTRXSUMMARY {msg}"
 
 
 def build_tx_rti_fields(*, state: ControllerState, tx_alias: str) -> TxRtiFields:
@@ -114,19 +151,16 @@ def build_device_status_lines(
         if tx_alias in cfg.tx_skipped_aliases:
             continue
         lines.append(format_dt_tx_line(state=state, tx_alias=tx_alias))
-    for rx_alias in sorted(cfg.rx_by_alias.keys(), key=rx_alias_sort_key):
-        if rx_alias in cfg.rx_skipped_aliases:
-            continue
-        lines.append(format_dt_rx_line(state=state, rx_alias=rx_alias))
+    lines.append(format_dt_rx_summary_line(cfg=cfg, state=state))
     return lines
 
 
 class RtiStatusReporter:
     """
-    Push per-TX/RX status lines to RTI Two Way Strings (TCP persistent link).
+    Push status to RTI Two Way Strings (TCP persistent link).
 
-    - Periodic full refresh every interval_seconds
-    - On-change pushes after AMX polls / matrix updates (deduped per line)
+    - Per-TX DTTX lines (boolean-friendly key=value fields for Integration Designer)
+    - One DTRXSUMMARY line for all RX (human-readable string; not per-RX booleans)
     """
 
     def __init__(

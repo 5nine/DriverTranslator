@@ -444,7 +444,7 @@ async def handle_http_client(
                     elif key == "rti_status_enabled":
                         v = snap.get("rti_status_enabled")
                         paras = [
-                            f"rti_status_enabled is now {str(v).lower()} (TCP per-device status to RTI Two Way Strings).",
+                            f"rti_status_enabled is now {str(v).lower()} (TCP: per-TX DTTX booleans + one DTRXSUMMARY string for RX).",
                             "Takes effect immediately; no service restart needed.",
                         ]
                     else:
@@ -1529,7 +1529,7 @@ async def handle_http_client(
       </div>
     </div>
     <div class="row">
-      <div><b>RTI status telemetry</b><span class="help-icon" title="When ON, sends per-TX/RX status lines over a persistent TCP connection to the RTI Two Way Strings port (rti_status host/port). Runtime only if host/port are configured.">?</span></div>
+      <div><b>RTI status telemetry</b><span class="help-icon" title="When ON, pushes DTTX lines per TX (for RTI boolean variables) and one DTRXSUMMARY text line for all RX faults over TCP to the Two Way Strings port (rti_status host/port).">?</span></div>
       <div class="ctrl-actions">
         <code id="st_rti_status">{str(rt.get('rti_status_enabled', False)).lower()}</code>
         <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="rti_status_enabled" data-value="{'false' if rt.get('rti_status_enabled', False) else 'true'}">Toggle</button>

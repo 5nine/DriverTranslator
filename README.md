@@ -189,9 +189,9 @@ Point the RTI WyreStorm NetworkHD “controller” connection to the DriverTrans
 - **IP**: DriverTranslator host (control NIC)
 - **Port**: `2323` (TCP)
 
-### Two Way Strings v2.7 (per-TX/RX status, TCP)
+### Two Way Strings v2.7 (TX booleans + RX summary string, TCP)
 
-DriverTranslator pushes **per-device status** to RTI **Two Way Strings** over a **persistent TCP connection** (default). This matches RTI TCP mode (the driver's **Connection** boolean reflects link up/down) and leaves the same socket open for **future RTI → DriverTranslator command strings**.
+DriverTranslator pushes status to RTI **Two Way Strings** over a **persistent TCP connection** (default). **Each TX** gets its own line for **boolean** variables in Integration Designer (~10 TX × 3 booleans). **All RX** share **one human-readable summary line** (string variable — display the text as-is, no parsing).
 
 **RTI Integration Designer setup (TCP):**
 
@@ -200,12 +200,11 @@ DriverTranslator pushes **per-device status** to RTI **Two Way Strings** over a 
    - **Local Port** = `rti_status.port` (example `30002`)
    - DriverTranslator connects **to** the RTI processor IP on that port (`host` / `port` in config).
 3. **Receive strings** (match anywhere in the line; v2.7 wildcard `$$*$$`):
-   - `DTSTATUS$$*$$` — summary heartbeat
-   - `DTTX$$*$$` — any transmitter status line
-   - `DTRX$$*$$` — any receiver status line
-4. Optional **RX string variable boundaries** (prefix/suffix) to populate variables, e.g. prefix `DTRX OUT1-TV1 ` and suffix ` ROUTE=` to capture the routed TX alias. A carriage return ends variable names (DriverTranslator terminates every line with `\r\n`).
-5. **Framing**: status lines are short; extra start/stop framing is usually not required. If needed, use a single stop character such as `%0a` (line feed) per the Two Way Strings manual.
-6. **PING** in the Two Way driver is RTI **polling the device**; DriverTranslator instead **pushes** status on an interval. Do not rely on PING for TX/RX telemetry.
+   - `DTSTATUS$$*$$` — optional heartbeat (counts)
+   - `DTTX$$*$$` or per alias `DTTX IN1-BOX1$$*$$` — **boolean** fields per TX (see table below)
+   - `DTRXSUMMARY$$*$$` — **one string variable** for all RX faults (prefix `DTRXSUMMARY `, suffix empty or line end)
+4. **Framing**: status lines are short; extra start/stop framing is usually not required. If needed, use a single stop character such as `%0a` (line feed) per the Two Way Strings manual.
+5. **PING** in the Two Way driver is RTI **polling the device**; DriverTranslator instead **pushes** status on an interval. Set **PING Time = 0**.
 
 **Inbound commands (future):** DriverTranslator already reads lines from RTI on the same TCP socket and logs them (`handle_inbound_twoway_line`). Add RTI **Transmit / Command strings** when you are ready to send commands to DriverTranslator on that link.
 
@@ -226,47 +225,38 @@ Example `config.json`:
 
 - `protocol`: `tcp` (default) or `udp` (one-way datagrams only; RTI doc: UDP is effectively one-way)
 - `host` / `port`: RTI processor IP and the Two Way Strings **TCP listen port**
-- `interval_seconds`: full refresh of all TX/RX lines (default 30)
-- `on_change`: also send immediately when a device's status changes (AMX poll or matrix route)
+- `interval_seconds`: full refresh (default 30)
+- `on_change`: also send when status changes (AMX poll or matrix route)
 
-**Message format** (one CRLF-terminated line per message; TCP may send many lines on one connection):
+**Message format** (CRLF-terminated lines):
 
 | Line | Example |
 |------|---------|
-| Summary | `DTSTATUS MODE=LIVE RTI_CLIENTS=1 TX_ONLINE=10/10 RX_ONLINE=38/40` |
-| TX | `DTTX IN1-BOX1 status=ok hdmi-state=connected tx-state=connected` |
-| TX | `DTTX IN2-BOX2 status=error hdmi-state=disconnected tx-state=connected` |
-| TX | `DTTX IN3-BOX3 status=error hdmi-state=no signal tx-state=connected` |
-| TX | `DTTX IN4-BOX4 status=error hdmi-state=null tx-state=disconnected` |
-| RX | `DTRX OUT1-TV1 status=ok hdmi-out=on hdmi-link=connected rx-state=connected` |
-| RX | `DTRX OUT2-TV2 status=error hdmi-out=on hdmi-link=disconnected rx-state=connected` |
-| RX | `DTRX OUT3-TV3 status=error hdmi-out=off hdmi-link=unknown rx-state=connected` |
-| RX | `DTRX OUT4-TV4 status=error hdmi-out=null hdmi-link=null rx-state=disconnected` |
+| Summary | `DTSTATUS MODE=LIVE RTI_CLIENTS=1 TX_ONLINE=10/10 RX_ONLINE=80/80` |
+| TX (one per encoder) | `DTTX IN1-BOX1 status=ok hdmi-state=connected tx-state=connected` |
+| TX fault | `DTTX IN2-BOX2 status=error hdmi-state=no signal tx-state=connected` |
+| RX (all receivers, one line) | `DTRXSUMMARY All 80 RX OK` |
+| RX faults | `DTRXSUMMARY 2 RX fault(s): OUT1-TV1 (TV disconnected); OUT5-TV5 (offline)` |
 
-**TX fields (for RTI variables / booleans on iPad)**
+**TX — boolean variables (one RX string slot per TX alias recommended)**
 
-| Field | Values | Meaning |
-|-------|--------|---------|
-| `status` | `ok`, `error` | `error` if TX offline **or** HDMI not `connected` |
-| `hdmi-state` | `connected`, `disconnected`, `no signal`, `null` | From AMX when online; `null` when TX offline (no poll data) |
-| `tx-state` | `connected`, `disconnected` | Encoder reachable on TCP (`?` poll) |
+| Field | Boolean true when | Prefix / true value example |
+|-------|-------------------|-----------------------------|
+| `status` | TX healthy | prefix `status=`, true `ok` |
+| `hdmi-state` | HDMI input OK | prefix `hdmi-state=`, true `connected` |
+| `tx-state` | Encoder answers AMX TCP | prefix `tx-state=`, true `connected` |
 
-Suggested Two Way RX string per TX alias: `DTTX IN1-BOX1$$*$$` (or one wildcard line `DTTX$$*$$` for all TX).
+Match string example: `DTTX IN1-BOX1$$*$$`. Repeat for each TX alias (pilot: 10 strings).
 
-AMX encoder: `HDMIINPUT` or `DVIINPUT` `disconnected` → `hdmi-state=disconnected`; `connected` without valid `INPUTRES`/`MODE` (e.g. `INPUTRES:0x0`) → `no signal`; valid `INPUTRES` or `MODE` (e.g. `MODE:1920x1080@60`) → `hdmi-state=connected` and `status=ok`.
+`hdmi-state` values: `connected`, `disconnected`, `no signal`, `null` (offline). AMX uses `DVIINPUT`/`HDMIINPUT` + `INPUTRES`/`MODE` on the wire.
 
-**RX fields (matches web Status: HDMI ON/OFF + CONNECTED)**
+**RX — one string variable (not booleans)**
 
-| Field | Values | Meaning |
-|-------|--------|---------|
-| `status` | `ok`, `error` | `ok` only when RX online, `hdmi-out=on`, and `hdmi-link=connected` |
-| `hdmi-out` | `on`, `off`, `unknown`, `null` | Output enabled from AMX `HDMIOFF` / `DVIOFF` (`off`/`0` = on); `null` when RX offline |
-| `hdmi-link` | `connected`, `disconnected`, `unknown`, `null` | TV/sink from AMX `HDMISTATUS` / `DVISTATUS`; `null` when RX offline |
-| `rx-state` | `connected`, `disconnected` | Decoder reachable on TCP (`?` poll) |
+| Match | Variable type | Display |
+|-------|---------------|---------|
+| `DTRXSUMMARY$$*$$` | Standard string | Prefix `DTRXSUMMARY ` — remainder is the operator message |
 
-Suggested Two Way RX string per RX alias: `DTRX OUT1-TV1$$*$$` (or one wildcard line `DTRX$$*$$` for all RX).
-
-AMX decoder (typical N2322 after firmware update): `DVIOFF:0` → `hdmi-out=on`; `DVISTATUS:connected` → `hdmi-link=connected`. Resolution (`MODE` / `INPUTRES`) is not reported to RTI.
+Examples: `All 80 RX OK` or `3 RX fault(s): OUT12-TV12 (HDMI output off); …` (fault list capped at 12 aliases per line). Full detail remains on the DriverTranslator **Status** web page.
 
 The built-in HTTP status page remains available for local monitoring:
 
