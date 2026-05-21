@@ -6,8 +6,6 @@ import logging
 import socket
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
-from .networking import open_connection
-
 if TYPE_CHECKING:
     from .models import RuntimeSettings
 
@@ -20,12 +18,12 @@ class RtiTwoWayTransport:
     """
     RTI Two Way Strings transport (TCP default, UDP optional).
 
-    TCP (recommended): one persistent connection to the RTI processor. DriverTranslator
-    writes CRLF-terminated status lines; a background reader accepts inbound lines from
-    RTI (for future command strings on the same socket). Matches RTI TCP mode where the
-    Connection boolean reflects link state.
+    TCP (recommended): DriverTranslator listens; RTI XP connects as TCP client
+    (Two Way "TCP Connection" to integrion IP:port). One active client at a time;
+    CRLF-terminated status lines are pushed on that socket; inbound lines from RTI
+    are read for future command strings.
 
-    UDP: connectionless one-way status datagrams (RTI doc: effectively one-way).
+    UDP: connectionless one-way status datagrams to host:port (RTI doc: effectively one-way).
     """
 
     def __init__(
@@ -41,7 +39,6 @@ class RtiTwoWayTransport:
         connect_timeout_s: float = 5.0,
         reconnect_delay_s: float = 2.0,
     ) -> None:
-        self._enabled = enabled and bool(host) and int(port) > 0
         self._runtime = runtime
         self._protocol = (protocol or "tcp").strip().lower()
         self._host = host or ""
@@ -57,6 +54,12 @@ class RtiTwoWayTransport:
         self._tcp_connected = asyncio.Event()
         self._tcp_send_lock = asyncio.Lock()
         self._tcp_task: Optional[asyncio.Task[None]] = None
+        self._enabled = _telemetry_config_valid(
+            enabled=enabled,
+            protocol=self._protocol,
+            host=self._host,
+            port=self._port,
+        )
 
     @property
     def enabled(self) -> bool:
@@ -72,7 +75,7 @@ class RtiTwoWayTransport:
         if self._protocol == "udp":
             await self._start_udp()
             return
-        self._tcp_task = asyncio.create_task(self._tcp_loop(), name="dt-rti-twoway-tcp")
+        self._tcp_task = asyncio.create_task(self._tcp_server_loop(), name="dt-rti-twoway-tcp")
 
     async def _start_udp(self) -> None:
         loop = asyncio.get_running_loop()
@@ -106,48 +109,97 @@ class RtiTwoWayTransport:
             return False
         return True
 
-    async def _tcp_loop(self) -> None:
+    def _tcp_listen_host(self) -> str:
+        return self._bind_address or "0.0.0.0"
+
+    async def _tcp_server_loop(self) -> None:
+        bind_host = self._tcp_listen_host()
         while self._enabled:
-            if not self._telemetry_active():
-                self._tcp_connected.clear()
-                await asyncio.sleep(1.0)
-                continue
-            reader: Optional[asyncio.StreamReader] = None
-            writer: Optional[asyncio.StreamWriter] = None
+            server: Optional[asyncio.Server] = None
             try:
-                reader, writer = await open_connection(
-                    self._host,
-                    self._port,
-                    timeout=self._connect_timeout_s,
-                    local_addr=(self._bind_address, 0) if self._bind_address else None,
+                server = await asyncio.start_server(
+                    self._on_tcp_client,
+                    host=bind_host,
+                    port=self._port,
+                    reuse_address=True,
                 )
-                self._tcp_reader = reader
-                self._tcp_writer = writer
-                self._tcp_connected.set()
+                sockets = server.sockets or []
+                addrs = ", ".join(str(s.getsockname()) for s in sockets)
                 LOG.info(
-                    "RTI Two Way Strings TCP connected to %s:%d",
-                    self._host,
+                    "RTI Two Way Strings TCP listening on %s (port %d)",
+                    addrs or f"{bind_host}:{self._port}",
                     self._port,
                 )
-                await self._tcp_read_loop(reader)
+                async with server:
+                    await server.serve_forever()
             except asyncio.CancelledError:
                 raise
             except Exception:
-                LOG.debug(
-                    "RTI Two Way Strings TCP connect/read ended (%s:%d)",
-                    self._host,
+                LOG.warning(
+                    "RTI Two Way Strings TCP server ended (%s:%d)",
+                    bind_host,
                     self._port,
                     exc_info=True,
                 )
             finally:
-                self._tcp_connected.clear()
-                self._tcp_reader = None
-                self._tcp_writer = None
-                if writer is not None:
-                    writer.close()
+                if server is not None:
+                    server.close()
                     with contextlib.suppress(Exception):
-                        await writer.wait_closed()
+                        await server.wait_closed()
+                await self._drop_tcp_client()
             await asyncio.sleep(self._reconnect_delay_s)
+
+    async def _on_tcp_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        peer = writer.get_extra_info("peername")
+        LOG.info("RTI Two Way Strings TCP client connected from %s", peer)
+        await self._set_tcp_client(reader, writer)
+        try:
+            await self._tcp_read_loop(reader)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOG.debug("RTI Two Way TCP read ended (%s)", peer, exc_info=True)
+        finally:
+            await self._drop_tcp_client(reader, writer)
+            LOG.info("RTI Two Way Strings TCP client disconnected (%s)", peer)
+
+    async def _set_tcp_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        async with self._tcp_send_lock:
+            old_writer = self._tcp_writer
+            self._tcp_reader = reader
+            self._tcp_writer = writer
+            self._tcp_connected.set()
+            if old_writer is not None and old_writer is not writer:
+                old_writer.close()
+                with contextlib.suppress(Exception):
+                    await old_writer.wait_closed()
+
+    async def _drop_tcp_client(
+        self,
+        reader: Optional[asyncio.StreamReader] = None,
+        writer: Optional[asyncio.StreamWriter] = None,
+    ) -> None:
+        async with self._tcp_send_lock:
+            if reader is not None and self._tcp_reader is not reader:
+                return
+            if writer is not None and self._tcp_writer is not writer:
+                return
+            close_writer = self._tcp_writer
+            self._tcp_reader = None
+            self._tcp_writer = None
+            self._tcp_connected.clear()
+            if close_writer is not None:
+                close_writer.close()
+                with contextlib.suppress(Exception):
+                    await close_writer.wait_closed()
 
     async def _tcp_read_loop(self, reader: asyncio.StreamReader) -> None:
         while True:
@@ -174,8 +226,7 @@ class RtiTwoWayTransport:
             await asyncio.wait_for(self._tcp_connected.wait(), timeout=self._connect_timeout_s)
         except asyncio.TimeoutError:
             LOG.debug(
-                "RTI Two Way TCP not connected; dropped status line (%s:%d)",
-                self._host,
+                "RTI Two Way TCP: no client connected; dropped status line (listen port %d)",
                 self._port,
             )
             return
@@ -188,6 +239,14 @@ class RtiTwoWayTransport:
                 await writer.drain()
             except Exception:
                 LOG.debug("RTI Two Way TCP send failed", exc_info=True)
+
+
+def _telemetry_config_valid(*, enabled: bool, protocol: str, host: str, port: int) -> bool:
+    if not enabled or port <= 0:
+        return False
+    if protocol == "udp":
+        return bool(host)
+    return True
 
 
 async def _read_text_line(reader: asyncio.StreamReader) -> Optional[str]:

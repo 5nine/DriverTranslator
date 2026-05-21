@@ -160,8 +160,11 @@ def validate_config(cfg: Config) -> None:
     if cfg.http_status_port <= 0 or cfg.http_status_port > 65535:
         errors.append(f"Invalid http_status.port: {cfg.http_status_port}")
 
-    if cfg.rti_status_enabled and (not cfg.rti_status_host or cfg.rti_status_port <= 0):
-        warnings.append("rti_status.enabled=true but host/port is missing; telemetry will not be sent.")
+    if cfg.rti_status_enabled:
+        if cfg.rti_status_port <= 0:
+            warnings.append("rti_status.enabled=true but port is missing; telemetry will not be sent.")
+        elif cfg.rti_status_protocol == "udp" and not cfg.rti_status_host:
+            warnings.append("rti_status UDP enabled but host is missing; telemetry will not be sent.")
 
     if warnings:
         for w in warnings:

@@ -195,16 +195,15 @@ DriverTranslator pushes status to RTI **Two Way Strings** over a **persistent TC
 
 **RTI Integration Designer setup (TCP):**
 
-1. Add a **Two Way Strings** driver instance: **Network (TCP)**.
-2. Configure RTI as the **TCP server** on the control processor:
-   - **Local Port** = `rti_status.port` (example `30002`)
-   - DriverTranslator connects **to** the RTI processor IP on that port (`host` / `port` in config).
-3. **Receive strings** (match anywhere in the line; v2.7 wildcard `$$*$$`):
+1. Add a **Two Way Strings** driver instance: **Network (TCP)** → **TCP Connection** (RTI connects out).
+2. **Network Address** = DriverTranslator host IP (example `100.64.200.21`), **Network Port** = `rti_status.port` (example `4999`).
+3. On integrion, DriverTranslator **listens** on that port (`rti_status.port`, optional `bind_address`, default `0.0.0.0`). `host` is not used for TCP (only for UDP).
+4. **Receive strings** (match anywhere in the line; v2.7 wildcard `$$*$$`):
    - `DTSTATUS$$*$$` — optional heartbeat (counts)
    - `DTTX$$*$$` or per alias `DTTX IN1-BOX1$$*$$` — **boolean** fields per TX (see table below)
    - `DTRXSUMMARY$$*$$` — **one string variable** for all RX faults (prefix `DTRXSUMMARY `, suffix empty or line end)
-4. **Framing**: status lines are short; extra start/stop framing is usually not required. If needed, use a single stop character such as `%0a` (line feed) per the Two Way Strings manual.
-5. **PING** in the Two Way driver is RTI **polling the device**; DriverTranslator instead **pushes** status on an interval. Set **PING Time = 0**.
+5. **Framing**: status lines are short; extra start/stop framing is usually not required. If needed, use a single stop character such as `%0a` (line feed) per the Two Way Strings manual.
+6. **PING** in the Two Way driver is RTI **polling the device**; DriverTranslator instead **pushes** status on an interval. Set **PING Time = 0**.
 
 **Inbound commands (future):** DriverTranslator already reads lines from RTI on the same TCP socket and logs them (`handle_inbound_twoway_line`). Add RTI **Transmit / Command strings** when you are ready to send commands to DriverTranslator on that link.
 
@@ -215,8 +214,9 @@ Example `config.json`:
   "rti_status": {
     "enabled": true,
     "protocol": "tcp",
-    "host": "192.168.1.50",
-    "port": 30002,
+    "host": null,
+    "port": 4999,
+    "bind_address": "0.0.0.0",
     "interval_seconds": 30,
     "on_change": true
   }
@@ -224,7 +224,9 @@ Example `config.json`:
 ```
 
 - `protocol`: `tcp` (default) or `udp` (one-way datagrams only; RTI doc: UDP is effectively one-way)
-- `host` / `port`: RTI processor IP and the Two Way Strings **TCP listen port**
+- `port`: TCP **listen** port on DriverTranslator (RTI XP connects here as client)
+- `bind_address`: optional bind IP (default all interfaces); ignored for TCP `host`
+- `host`: RTI destination IP — **UDP only**
 - `interval_seconds`: full refresh (default 30)
 - `on_change`: also send when status changes (AMX poll or matrix route)
 
@@ -247,7 +249,7 @@ Example `config.json`:
 
 Healthy: `status=ok` and `tx-state=connected` → both booleans false. Match: `DTTX IN1-BOX1$$*$$` per alias (21 RX strings with summary for 10 TX).
 
-Import ready-made config from `untracked/drivertranslator-twoway-pilot10.driverconfig` (regenerate via `tools/generate_rti_twoway_driverconfig.py`). Example network: RTI XP6s **100.64.200.22:4999** (TCP server), DriverTranslator **100.64.200.21** (client).
+Import ready-made config from `untracked/drivertranslator-twoway-pilot10.driverconfig` (regenerate via `tools/generate_rti_twoway_driverconfig.py`). Example network: DriverTranslator **100.64.200.21:4999** (TCP server), RTI XP6s **100.64.200.22** (TCP client / Two Way “TCP Connection”).
 
 `hdmi-state` values: `connected`, `disconnected`, `no signal`, `null` (offline). AMX uses `DVIINPUT`/`HDMIINPUT` + `INPUTRES`/`MODE` on the wire.
 

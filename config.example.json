@@ -49,9 +49,9 @@
   "rti_status": {
     "enabled": false,
     "protocol": "tcp",
-    "host": "192.168.1.50",
-    "port": 30002,
-    "bind_address": null,
+    "host": null,
+    "port": 4999,
+    "bind_address": "0.0.0.0",
     "interval_seconds": 30,
     "on_change": true
   },

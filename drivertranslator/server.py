@@ -140,14 +140,22 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         on_change=cfg.rti_status_on_change,
     )
     await rti_status.start()
-    if cfg.rti_status_enabled and cfg.rti_status_host and cfg.rti_status_port > 0:
-        LOG.info(
-            "RTI status telemetry enabled (%s %s:%d, interval=%ds)",
-            cfg.rti_status_protocol.upper(),
-            cfg.rti_status_host,
-            cfg.rti_status_port,
-            cfg.rti_status_interval_seconds,
-        )
+    if cfg.rti_status_enabled and cfg.rti_status_port > 0:
+        if cfg.rti_status_protocol == "udp" and cfg.rti_status_host:
+            LOG.info(
+                "RTI status telemetry enabled (UDP -> %s:%d, interval=%ds)",
+                cfg.rti_status_host,
+                cfg.rti_status_port,
+                cfg.rti_status_interval_seconds,
+            )
+        elif cfg.rti_status_protocol != "udp":
+            bind = cfg.rti_status_bind_address or "0.0.0.0"
+            LOG.info(
+                "RTI status telemetry enabled (TCP listen %s:%d, interval=%ds)",
+                bind,
+                cfg.rti_status_port,
+                cfg.rti_status_interval_seconds,
+            )
 
     async def _run_startup_self_test() -> None:
         # Run in background so web/RTI listeners come up immediately.

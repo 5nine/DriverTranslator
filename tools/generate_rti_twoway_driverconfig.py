@@ -3,7 +3,7 @@
 Generate RTI Two Way Strings .driverconfig for DriverTranslator telemetry.
 
 Pilot default: 10 TX (IN1-BOX1 .. IN10-BOX10), one DTRXSUMMARY string, two fault booleans per TX:
-overall error (status=error) and TX offline (tx-state=disconnected). RTI XP6s: 100.64.200.22:4999.
+overall error (status=error) and TX offline (tx-state=disconnected). DT listens 100.64.200.21:4999; RTI connects.
 
 Usage:
   python tools/generate_rti_twoway_driverconfig.py -o untracked/drivertranslator-twoway-pilot10.driverconfig
@@ -141,10 +141,10 @@ def main() -> None:
     parser.add_argument("--tx-count", type=int, default=10)
     parser.add_argument(
         "--net-address",
-        default="100.64.200.22",
-        help="RTI XP6s processor IP (TCP server)",
+        default="100.64.200.21",
+        help="DriverTranslator IP (RTI Two Way TCP Connection target)",
     )
-    parser.add_argument("--net-port", type=int, default=4999, help="RTI Two Way local listen port")
+    parser.add_argument("--net-port", type=int, default=4999, help="DriverTranslator Two Way listen port")
     args = parser.parse_args()
 
     aliases = _tx_aliases(max(1, args.tx_count))

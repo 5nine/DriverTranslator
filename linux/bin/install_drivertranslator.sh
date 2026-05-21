@@ -192,13 +192,13 @@ if [[ "$DO_CONFIG" -eq 1 ]]; then
     read -r -p "Enable RTI per-device status (Two Way Strings TCP)? (y/N): " RTI_STAT
     RTI_STAT="${RTI_STAT:-N}"
     if [[ "$RTI_STAT" =~ ^[Yy]$ ]]; then
-      read -r -p "  RTI processor IP (Two Way Strings target): " RTI_STAT_HOST
-      read -r -p "  RTI Two Way Strings local port (default 30002): " RTI_STAT_PORT
-      RTI_STAT_PORT="${RTI_STAT_PORT:-30002}"
+      read -r -p "  Two Way TCP listen port on this host (default 4999): " RTI_STAT_PORT
+      RTI_STAT_PORT="${RTI_STAT_PORT:-4999}"
+      read -r -p "  Bind IP for Two Way listen (blank=0.0.0.0): " RTI_STAT_BIND
       read -r -p "  Status interval seconds (default 30): " RTI_STAT_INT
       RTI_STAT_INT="${RTI_STAT_INT:-30}"
     else
-      RTI_STAT_HOST=""
+      RTI_STAT_BIND=""
       RTI_STAT_PORT="0"
       RTI_STAT_INT="30"
     fi
@@ -246,7 +246,7 @@ http_port = int("${HTTP_PORT}")
 http_log_lines = int("${HTTP_LOGLINES}")
 http_pw = "${HTTP_PW}".strip() or "1234"
 rti_stat_enabled = "${RTI_STAT}".strip().lower() in ("y","yes","true","1","on")
-rti_stat_host = "${RTI_STAT_HOST}".strip() or None
+rti_stat_bind = "${RTI_STAT_BIND}".strip() or None
 rti_stat_port = int("${RTI_STAT_PORT}")
 rti_stat_int = int("${RTI_STAT_INT}")
 
@@ -296,7 +296,7 @@ cfg = {
     "set_retry_backoff_max_ms": 1200
   },
   "server": { "expanded_log": False },
-  "rti_status": { "enabled": rti_stat_enabled, "protocol": "tcp", "host": rti_stat_host, "port": rti_stat_port, "bind_address": None, "interval_seconds": rti_stat_int, "on_change": True },
+  "rti_status": { "enabled": rti_stat_enabled, "protocol": "tcp", "host": None, "port": rti_stat_port, "bind_address": rti_stat_bind, "interval_seconds": rti_stat_int, "on_change": True },
   "http_status": { "enabled": http_enabled, "bind": http_bind, "port": http_port, "log_lines": http_log_lines, "control_token": None, "password": http_pw },
   "rti_control": { "enabled": False, "bind_address": None, "port": 0, "reboot_command": "DT REBOOT" }
 }
