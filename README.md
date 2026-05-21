@@ -198,12 +198,12 @@ DriverTranslator pushes status to RTI **Two Way Strings** over a **persistent TC
 1. Add a **Two Way Strings** driver instance: **Network (TCP)** → **TCP Connection** (RTI connects out).
 2. **Network Address** = DriverTranslator host IP (example `100.64.200.21`), **Network Port** = `rti_status.port` (example `4999`).
 3. On integrion, DriverTranslator **listens** on that port (`rti_status.port`, optional `bind_address`, default `0.0.0.0`). `host` is not used for TCP (only for UDP).
-4. **Receive strings** (match anywhere in the line; v2.7 wildcard `$$*$$`):
-   - `DTSTATUS$$*$$` — optional heartbeat (counts)
-   - `DTTX$$*$$` or per alias `DTTX IN1-BOX1$$*$$` — **boolean** fields per TX (see table below)
-   - `DTRXSUMMARY$$*$$` — **one string variable** for all RX faults (prefix `DTRXSUMMARY `, suffix empty or line end)
-5. **Framing**: status lines are short; extra start/stop framing is usually not required. If needed, use a single stop character such as `%0a` (line feed) per the Two Way Strings manual.
-6. **PING** in the Two Way driver is RTI **polling the device**; DriverTranslator instead **pushes** status on an interval. Set **PING Time = 0**.
+4. **Receive strings** (one **line** per message; v2.7 wildcard `$$*$$`):
+   - `DTTX IN1-BOX1$$*$$` (per TX) — **boolean** fields (see table below)
+   - `DTRXSUMMARY$$*$$` — **one string variable** for all RX faults (prefix `DTRXSUMMARY `)
+5. **Framing (required):** In the Two Way driver enable **Stop Byte**, **Stop Character** = `%0a` (line feed). DriverTranslator sends **LF** (`\n`) after each line. Without stop-byte framing, RTI concatenates all lines into one blob and booleans parse incorrectly.
+6. Import/regenerate `.driverconfig` from `tools/generate_rti_twoway_driverconfig.py` (`enableStopByte` = true). `DTSTATUS` is not sent on the Two Way link (no RX slots).
+7. **PING** in the Two Way driver is RTI **polling the device**; DriverTranslator instead **pushes** status on an interval. Set **PING Time = 0**.
 
 **Inbound commands (future):** DriverTranslator already reads lines from RTI on the same TCP socket and logs them (`handle_inbound_twoway_line`). Add RTI **Transmit / Command strings** when you are ready to send commands to DriverTranslator on that link.
 
@@ -230,11 +230,10 @@ Example `config.json`:
 - `interval_seconds`: full refresh (default 30)
 - `on_change`: also send when status changes (AMX poll or matrix route)
 
-**Message format** (CRLF-terminated lines):
+**Message format** (one **LF**-terminated line per message on the Two Way TCP link):
 
 | Line | Example |
 |------|---------|
-| Summary | `DTSTATUS MODE=LIVE RTI_CLIENTS=1 TX_ONLINE=10/10 RX_ONLINE=80/80` |
 | TX (one per encoder) | `DTTX IN1-BOX1 status=ok hdmi-state=connected tx-state=connected` |
 | TX fault | `DTTX IN2-BOX2 status=error hdmi-state=no signal tx-state=connected` |
 | RX (all receivers, one line) | `DTRXSUMMARY All 80 RX OK` |

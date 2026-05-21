@@ -69,7 +69,7 @@ def _emit_boilerplate(lines: List[str]) -> None:
     lines.append('\t\t<setting variable="ConnectionType">0</setting>')
     lines.append('\t\t<setting variable="DebugTrace">false</setting>')
     lines.append('\t\t<setting variable="enableStartByte">false</setting>')
-    lines.append('\t\t<setting variable="enableStopByte">false</setting>')
+    lines.append('\t\t<setting variable="enableStopByte">true</setting>')
     lines.append('\t\t<setting variable="pingString">PING</setting>')
     lines.append('\t\t<setting variable="pingTime">0</setting>')
     lines.append('\t\t<setting variable="serialbaudrate">9600</setting>')

@@ -146,7 +146,20 @@ def build_device_status_lines(
     state: ControllerState,
     health: HealthState,
 ) -> List[str]:
+    """Includes DTSTATUS summary (logging/diagnostics). Prefer build_twoway_status_lines for RTI."""
     lines: List[str] = [format_dt_status_summary(cfg=cfg, state=state, health=health)]
+    lines.extend(build_twoway_status_lines(cfg=cfg, state=state))
+    return lines
+
+
+def build_twoway_status_lines(*, cfg: Config, state: ControllerState) -> List[str]:
+    """
+    Lines pushed to RTI Two Way Strings — one logical message per line (LF framed).
+
+    Omits DTSTATUS so RX string slots are not polluted; each DTTX/DTRXSUMMARY line
+    is parsed independently when enableStopByte + stopChar %0a are set in the driver.
+    """
+    lines: List[str] = []
     for tx_alias in sorted(cfg.tx_by_alias.keys(), key=tx_alias_sort_key):
         if tx_alias in cfg.tx_skipped_aliases:
             continue
@@ -211,10 +224,9 @@ class RtiStatusReporter:
                 LOG.exception("RTI status periodic push failed")
 
     async def _push_all(self) -> None:
-        lines = build_device_status_lines(cfg=self._cfg, state=self._state, health=self._health)
+        lines = build_twoway_status_lines(cfg=self._cfg, state=self._state)
         self._last_sent = {line: line for line in lines}
-        for line in lines:
-            await self._sender.send(line)
+        await self._sender.send_lines(lines)
         if LOG.isEnabledFor(logging.DEBUG):
             LOG.debug("RTI status: sent %d line(s) (full refresh)", len(lines))
 
@@ -224,7 +236,7 @@ class RtiStatusReporter:
         if force or not self._on_change:
             await self._push_all()
             return
-        lines = build_device_status_lines(cfg=self._cfg, state=self._state, health=self._health)
+        lines = build_twoway_status_lines(cfg=self._cfg, state=self._state)
         changed = [line for line in lines if self._last_sent.get(line) != line]
         if not changed:
             return

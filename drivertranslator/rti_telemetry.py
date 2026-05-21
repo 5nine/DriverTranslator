@@ -11,6 +11,9 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger("drivertranslator")
 
+# RTI Two Way stopChar is %0a (LF). Use LF-only so each status line is one framed message.
+RTI_TWOWAY_LINE_END = b"\n"
+
 OnInboundLine = Callable[[str], Awaitable[None]]
 
 
@@ -216,7 +219,7 @@ class RtiTwoWayTransport:
     async def send(self, message: str) -> None:
         if not self._telemetry_active():
             return
-        payload = (message.rstrip("\r\n") + "\r\n").encode("utf-8", errors="replace")
+        payload = message.rstrip("\r\n").encode("utf-8", errors="replace") + RTI_TWOWAY_LINE_END
         if self._protocol == "udp":
             await self._udp_ready.wait()
             if self._udp_transport is not None:
@@ -239,6 +242,13 @@ class RtiTwoWayTransport:
                 await writer.drain()
             except Exception:
                 LOG.debug("RTI Two Way TCP send failed", exc_info=True)
+
+    async def send_lines(self, lines: list[str]) -> None:
+        """Send multiple LF-terminated lines in one write (full RTI refresh)."""
+        if not lines:
+            return
+        body = "\n".join(line.rstrip("\r\n") for line in lines) + "\n"
+        await self.send(body)
 
 
 def _telemetry_config_valid(*, enabled: bool, protocol: str, host: str, port: int) -> bool:
