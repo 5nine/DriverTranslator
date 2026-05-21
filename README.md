@@ -238,9 +238,10 @@ Example `config.json`:
 | TX | `DTTX IN2-BOX2 status=error hdmi-state=disconnected tx-state=connected` |
 | TX | `DTTX IN3-BOX3 status=error hdmi-state=no signal tx-state=connected` |
 | TX | `DTTX IN4-BOX4 status=error hdmi-state=null tx-state=disconnected` |
-| RX | `DTRX OUT1-TV1 status=ok hdmi-state=connected rx-state=connected` |
-| RX | `DTRX OUT2-TV2 status=error hdmi-state=disconnected rx-state=connected` |
-| RX | `DTRX OUT3-TV3 status=error hdmi-state=null rx-state=disconnected` |
+| RX | `DTRX OUT1-TV1 status=ok hdmi-out=on hdmi-link=connected rx-state=connected` |
+| RX | `DTRX OUT2-TV2 status=error hdmi-out=on hdmi-link=disconnected rx-state=connected` |
+| RX | `DTRX OUT3-TV3 status=error hdmi-out=off hdmi-link=unknown rx-state=connected` |
+| RX | `DTRX OUT4-TV4 status=error hdmi-out=null hdmi-link=null rx-state=disconnected` |
 
 **TX fields (for RTI variables / booleans on iPad)**
 
@@ -254,15 +255,18 @@ Suggested Two Way RX string per TX alias: `DTTX IN1-BOX1$$*$$` (or one wildcard 
 
 AMX encoder: `HDMIINPUT` or `DVIINPUT` `disconnected` → `hdmi-state=disconnected`; `connected` without valid `INPUTRES`/`MODE` (e.g. `INPUTRES:0x0`) → `no signal`; valid `INPUTRES` or `MODE` (e.g. `MODE:1920x1080@60`) → `hdmi-state=connected` and `status=ok`.
 
-**RX fields (same pattern as TX)**
+**RX fields (matches web Status: HDMI ON/OFF + CONNECTED)**
 
 | Field | Values | Meaning |
 |-------|--------|---------|
-| `status` | `ok`, `error` | `error` if RX offline **or** sink HDMI not `connected` |
-| `hdmi-state` | `connected`, `disconnected`, `no signal`, `null` | Sink via AMX `HDMISTATUS`; `null` when RX offline |
-| `rx-state` | `connected`, `disconnected` | Decoder reachable on TCP |
+| `status` | `ok`, `error` | `ok` only when RX online, `hdmi-out=on`, and `hdmi-link=connected` |
+| `hdmi-out` | `on`, `off`, `unknown`, `null` | Output enabled from AMX `HDMIOFF` / `DVIOFF` (`off`/`0` = on); `null` when RX offline |
+| `hdmi-link` | `connected`, `disconnected`, `unknown`, `null` | TV/sink from AMX `HDMISTATUS` / `DVISTATUS`; `null` when RX offline |
+| `rx-state` | `connected`, `disconnected` | Decoder reachable on TCP (`?` poll) |
 
-AMX decoder: `HDMISTATUS:connected` = TV/sink detected; `disconnected` = TV off or cable unplugged. `INPUTRES` missing while sink connected → `no signal`.
+Suggested Two Way RX string per RX alias: `DTRX OUT1-TV1$$*$$` (or one wildcard line `DTRX$$*$$` for all RX).
+
+AMX decoder (typical N2322 after firmware update): `DVIOFF:0` → `hdmi-out=on`; `DVISTATUS:connected` → `hdmi-link=connected`. Resolution (`MODE` / `INPUTRES`) is not reported to RTI.
 
 The built-in HTTP status page remains available for local monitoring:
 

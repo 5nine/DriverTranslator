@@ -6,9 +6,11 @@ from typing import Dict, List, Optional, Tuple
 
 # (status, hdmi_state, tx_state) for RTI Two Way Strings TX lines
 TxRtiFields = Tuple[str, str, str]
+# (status, hdmi_out, hdmi_link, rx_state) for RX lines — matches web Status columns
+RxRtiFields = Tuple[str, str, str, str]
 
 from .models import Config, ControllerState, HealthState, RuntimeSettings
-from .protocol_helpers import classify_rx_hdmi_sink, classify_tx_input
+from .protocol_helpers import classify_tx_input
 from .rti_telemetry import RtiTwoWayTransport
 from .utils import rx_alias_sort_key, tx_alias_sort_key
 
@@ -23,30 +25,37 @@ def _tri_token(v: Optional[bool], *, on: str, off: str, unknown: str = "UNKNOWN"
     return unknown
 
 
-def build_rx_rti_fields(*, state: ControllerState, rx_alias: str) -> TxRtiFields:
+def build_rx_rti_fields(*, state: ControllerState, rx_alias: str) -> RxRtiFields:
     """
-    RTI-facing RX telemetry (per receiver / decoder sink).
+    RTI-facing RX telemetry (per receiver).
 
-    - status: ok | error
-    - hdmi-state: connected | disconnected | no signal | null (null when RX offline)
-    - rx-state: connected | disconnected  (AMX TCP reachable)
+    Uses the same polled state as the web Status page (from AMX getStatus / command
+    responses): DVIOFF or HDMIOFF → hdmi-out; DVISTATUS or HDMISTATUS → hdmi-link.
 
-    hdmi-state uses AMX HDMISTATUS (sink): TV/monitor detected vs off/detached.
+    - status: ok | error  (ok when decoder online, HDMI out on, and sink link connected)
+    - hdmi-out: on | off | unknown | null
+    - hdmi-link: connected | disconnected | unknown | null
+    - rx-state: connected | disconnected  (decoder TCP reachable)
     """
     rx_state = "connected" if state.rx_online.get(rx_alias, True) else "disconnected"
     if rx_state == "disconnected":
-        return ("error", "null", "disconnected")
+        return ("error", "null", "null", "disconnected")
 
-    fields = state.rx_status_fields.get(rx_alias, {})
-    hdmi_state = classify_rx_hdmi_sink(fields)
-    status = "ok" if hdmi_state == "connected" else "error"
-    return (status, hdmi_state, rx_state)
+    hdmi_out = _tri_token(state.rx_hdmi_output.get(rx_alias), on="on", off="off")
+    hdmi_link = _tri_token(
+        state.rx_hdmi_link.get(rx_alias),
+        on="connected",
+        off="disconnected",
+    )
+    status = "ok" if hdmi_out == "on" and hdmi_link == "connected" else "error"
+    return (status, hdmi_out, hdmi_link, rx_state)
 
 
 def format_dt_rx_line(*, state: ControllerState, rx_alias: str) -> str:
-    status, hdmi_state, rx_state = build_rx_rti_fields(state=state, rx_alias=rx_alias)
+    status, hdmi_out, hdmi_link, rx_state = build_rx_rti_fields(state=state, rx_alias=rx_alias)
     return (
-        f"DTRX {rx_alias} status={status} hdmi-state={hdmi_state} rx-state={rx_state}"
+        f"DTRX {rx_alias} status={status} hdmi-out={hdmi_out} hdmi-link={hdmi_link} "
+        f"rx-state={rx_state}"
     )
 
 
