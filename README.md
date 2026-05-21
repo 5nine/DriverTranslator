@@ -238,15 +238,21 @@ Example `config.json`:
 | RX (all receivers, one line) | `DTRXSUMMARY All 80 RX OK` |
 | RX faults | `DTRXSUMMARY 2 RX fault(s): OUT1-TV1 (TV disconnected); OUT5-TV5 (offline)` |
 
-**TX — boolean variables (one RX string slot per TX alias recommended)**
+**TX — boolean variables (fault = TRUE; five slots per TX alias)**
 
-| Field | Boolean true when | Prefix / true value example |
-|-------|-------------------|-----------------------------|
-| `status` | TX healthy | prefix `status=`, true `ok` |
-| `hdmi-state` | HDMI input OK | prefix `hdmi-state=`, true `connected` |
-| `tx-state` | Encoder answers AMX TCP | prefix `tx-state=`, true `connected` |
+Booleans are **true when something is wrong** (panel alarm), not when healthy.
 
-Match string example: `DTTX IN1-BOX1$$*$$`. Repeat for each TX alias (pilot: 10 strings).
+| Slot per TX | Prefix | `rxTrue` value (boolean TRUE) |
+|-------------|--------|-------------------------------|
+| Status fault | `status=` | `error` |
+| HDMI disconnected | `hdmi-state=` | `disconnected` |
+| HDMI no signal | `hdmi-state=` | `no signal` |
+| HDMI null / offline | `hdmi-state=` | `null` |
+| TX offline | `tx-state=` | `disconnected` |
+
+Match string example: `DTTX IN1-BOX1$$*$$` (repeat per alias; pilot uses 51 RX strings total with summary).
+
+Import ready-made config from `untracked/drivertranslator-twoway-pilot10.driverconfig` (regenerate via `tools/generate_rti_twoway_driverconfig.py`). Example network: RTI XP6s **100.64.200.22:4999** (TCP server), DriverTranslator **100.64.200.21** (client).
 
 `hdmi-state` values: `connected`, `disconnected`, `no signal`, `null` (offline). AMX uses `DVIINPUT`/`HDMIINPUT` + `INPUTRES`/`MODE` on the wire.
 
