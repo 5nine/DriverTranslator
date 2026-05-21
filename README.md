@@ -238,19 +238,14 @@ Example `config.json`:
 | RX (all receivers, one line) | `DTRXSUMMARY All 80 RX OK` |
 | RX faults | `DTRXSUMMARY 2 RX fault(s): OUT1-TV1 (TV disconnected); OUT5-TV5 (offline)` |
 
-**TX — boolean variables (fault = TRUE; five slots per TX alias)**
+**TX — two boolean variables per TX (fault = TRUE)**
 
-Booleans are **true when something is wrong** (panel alarm), not when healthy.
+| Slot name (example) | Prefix | `rxTrue` (TRUE when) | Meaning |
+|---------------------|--------|----------------------|---------|
+| `IN1-BOX1 error` | `status=` | `error` | HDMI-side / input fault (not ok) |
+| `IN1-BOX1 offline` | `tx-state=` | `disconnected` | Encoder not reachable on AMX TCP |
 
-| Slot per TX | Prefix | `rxTrue` value (boolean TRUE) |
-|-------------|--------|-------------------------------|
-| Status fault | `status=` | `error` |
-| HDMI disconnected | `hdmi-state=` | `disconnected` |
-| HDMI no signal | `hdmi-state=` | `no signal` |
-| HDMI null / offline | `hdmi-state=` | `null` |
-| TX offline | `tx-state=` | `disconnected` |
-
-Match string example: `DTTX IN1-BOX1$$*$$` (repeat per alias; pilot uses 51 RX strings total with summary).
+Healthy: `status=ok` and `tx-state=connected` → both booleans false. Match: `DTTX IN1-BOX1$$*$$` per alias (21 RX strings with summary for 10 TX).
 
 Import ready-made config from `untracked/drivertranslator-twoway-pilot10.driverconfig` (regenerate via `tools/generate_rti_twoway_driverconfig.py`). Example network: RTI XP6s **100.64.200.22:4999** (TCP server), DriverTranslator **100.64.200.21** (client).
 

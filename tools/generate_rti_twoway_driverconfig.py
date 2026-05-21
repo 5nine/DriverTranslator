@@ -2,8 +2,8 @@
 """
 Generate RTI Two Way Strings .driverconfig for DriverTranslator telemetry.
 
-Pilot default: 10 TX (IN1-BOX1 .. IN10-BOX10), one DTRXSUMMARY string, five fault booleans per TX
-(true when something is wrong). RTI XP6s: 100.64.200.22:4999 (TCP server), DT: 100.64.200.21 (client).
+Pilot default: 10 TX (IN1-BOX1 .. IN10-BOX10), one DTRXSUMMARY string, two fault booleans per TX:
+overall error (status=error) and TX offline (tx-state=disconnected). RTI XP6s: 100.64.200.22:4999.
 
 Usage:
   python tools/generate_rti_twoway_driverconfig.py -o untracked/drivertranslator-twoway-pilot10.driverconfig
@@ -41,10 +41,10 @@ def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
     )
     for alias in tx_aliases:
         match = f"DTTX {alias}$$*$$"
-        # Booleans are TRUE on fault (panel alarm / red), not when healthy.
+        # Booleans TRUE on fault. Two states only: HDMI-side fault vs encoder offline.
         slots.append(
             {
-                "name": f"{alias} status fault",
+                "name": f"{alias} error",
                 "match": match,
                 "var_type": VAR_BOOLEAN,
                 "prefix": "status=",
@@ -54,37 +54,7 @@ def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
         )
         slots.append(
             {
-                "name": f"{alias} hdmi disc",
-                "match": match,
-                "var_type": VAR_BOOLEAN,
-                "prefix": "hdmi-state=",
-                "suffix": " ",
-                "true_value": "disconnected",
-            }
-        )
-        slots.append(
-            {
-                "name": f"{alias} hdmi nosig",
-                "match": match,
-                "var_type": VAR_BOOLEAN,
-                "prefix": "hdmi-state=",
-                "suffix": " ",
-                "true_value": "no signal",
-            }
-        )
-        slots.append(
-            {
-                "name": f"{alias} hdmi null",
-                "match": match,
-                "var_type": VAR_BOOLEAN,
-                "prefix": "hdmi-state=",
-                "suffix": " ",
-                "true_value": "null",
-            }
-        )
-        slots.append(
-            {
-                "name": f"{alias} tx offline",
+                "name": f"{alias} offline",
                 "match": match,
                 "var_type": VAR_BOOLEAN,
                 "prefix": "tx-state=",
@@ -185,9 +155,9 @@ def main() -> None:
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(xml, encoding="utf-8")
-    n_bool = len(aliases) * 5
+    n_bool = len(aliases) * 2
     print(f"Wrote {args.output}")
-    print(f"  RX slots used: {1 + n_bool} (1 summary + {n_bool} TX fault booleans)")
+    print(f"  RX slots used: {1 + n_bool} (1 summary + {n_bool} TX booleans)")
     print(f"  TX aliases: {aliases[0]} .. {aliases[-1]}")
 
 
