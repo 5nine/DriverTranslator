@@ -32,10 +32,11 @@ def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
     Quoted key=value wire format (same prefix/suffix model as RTI reference driverconfig):
     extract text between prefix and suffix ", compare to rxTrue for booleans.
 
-    Wire: DTTX IN1-BOX1 status="ok" hdmi-state="connected" tx-state="connected"
+    Wire (one LF-terminated line per boolean — DriverTranslator sends these separately):
+      DTTX IN1-BOX1 status="ok"
+      DTTX IN1-BOX1 tx-state="connected"
 
-    Both TX booleans use v2.7 wildcard ($$*$$): fields sit between alias and later keys, and
-    rxString must not include the prefix or RTI cannot extract the value after the match.
+    Match strings align with each line (no $$*$$ wildcard).
     """
     slots: List[dict] = []
     slots.append(
@@ -52,7 +53,7 @@ def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
         slots.append(
             {
                 "name": f"{alias} error",
-                "match": f"DTTX {alias}$$*$$",
+                "match": f'DTTX {alias} status="',
                 "var_type": VAR_BOOLEAN,
                 "prefix": 'status="',
                 "suffix": '"',
@@ -62,7 +63,7 @@ def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
         slots.append(
             {
                 "name": f"{alias} offline",
-                "match": f"DTTX {alias}$$*$$",
+                "match": f'DTTX {alias} tx-state="',
                 "var_type": VAR_BOOLEAN,
                 "prefix": 'tx-state="',
                 "suffix": '"',
@@ -89,8 +90,7 @@ def _emit_boilerplate(lines: List[str]) -> None:
         lines.append(f'\t\t<setting variable="rxMultiplier{n}">1</setting>')
     for n in range(1, 101):
         lines.append(f'\t\t<setting variable="txString{n}type">0</setting>')
-    for n in range(1, 101):
-        lines.append(f'\t\t<setting variable="varType{n}">{VAR_STRING}</setting>')
+    # varType1..100 emitted once after RX slots (never preset to 0 — RTI import may keep first value).
 
 
 def _xml_escape(s: str) -> str:
@@ -114,6 +114,7 @@ def build_driverconfig(
     ]
     _emit_boilerplate(lines)
 
+    used = len(slots)
     for idx, slot in enumerate(slots, start=1):
         lines.append(f'\t\t<setting variable="rxPrefix{idx}">{_xml_escape(slot["prefix"])}</setting>')
         lines.append(f'\t\t<setting variable="rxSuffix{idx}">{_xml_escape(slot["suffix"])}</setting>')
@@ -121,11 +122,23 @@ def build_driverconfig(
         lines.append(
             f'\t\t<setting variable="rxString{idx}Name">{_xml_escape(slot["name"])}</setting>'
         )
-        lines.append(f'\t\t<setting variable="varType{idx}">{slot["var_type"]}</setting>')
         if slot["var_type"] == VAR_BOOLEAN and slot["true_value"]:
             lines.append(
                 f'\t\t<setting variable="rxTrue{idx}">{_xml_escape(slot["true_value"])}</setting>'
             )
+
+    # Wipe stale receive-string slots when ID merges an import over an old driverconfig.
+    for idx in range(used + 1, 101):
+        lines.append(f'\t\t<setting variable="rxPrefix{idx}"></setting>')
+        lines.append(f'\t\t<setting variable="rxSuffix{idx}"></setting>')
+        lines.append(f'\t\t<setting variable="rxString{idx}"></setting>')
+        lines.append(f'\t\t<setting variable="rxString{idx}Name"></setting>')
+
+    slot_var_types = {i: slots[i - 1]["var_type"] for i in range(1, used + 1)}
+    for idx in range(1, 101):
+        lines.append(
+            f'\t\t<setting variable="varType{idx}">{slot_var_types.get(idx, VAR_STRING)}</setting>'
+        )
 
     lines.append("\t</driver>")
     lines.append("</ConfigurationSettings>")

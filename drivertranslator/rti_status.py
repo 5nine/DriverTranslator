@@ -128,11 +128,27 @@ def build_tx_rti_fields(*, state: ControllerState, tx_alias: str) -> TxRtiFields
 
 
 def format_dt_tx_line(*, state: ControllerState, tx_alias: str) -> str:
+    """Combined TX line (logging / diagnostics only — not sent on Two Way link)."""
     status, hdmi_state, tx_state = build_tx_rti_fields(state=state, tx_alias=tx_alias)
     return (
         f"DTTX {tx_alias} status={_rti_quote(status)} hdmi-state={_rti_quote(hdmi_state)} "
         f"tx-state={_rti_quote(tx_state)}"
     )
+
+
+def format_dt_tx_rti_lines(*, state: ControllerState, tx_alias: str) -> List[str]:
+    """
+    One LF-framed line per RTI boolean slot (no wildcard in driver match strings).
+
+    Wire examples:
+      DTTX IN2-BOX2 status="error"
+      DTTX IN2-BOX2 tx-state="connected"
+    """
+    status, _hdmi_state, tx_state = build_tx_rti_fields(state=state, tx_alias=tx_alias)
+    return [
+        f"DTTX {tx_alias} status={_rti_quote(status)}",
+        f"DTTX {tx_alias} tx-state={_rti_quote(tx_state)}",
+    ]
 
 
 def format_dt_status_summary(*, cfg: Config, state: ControllerState, health: HealthState) -> str:
@@ -160,11 +176,14 @@ def build_device_status_lines(
 
 
 def _twoway_line_key(line: str) -> str:
-    """Stable key per TX / summary so ok→error→ok still triggers a push."""
+    """Stable key per TX field / summary so ok→error→ok still triggers a push."""
     if line.startswith("DTRXSUMMARY"):
         return "DTRXSUMMARY"
     if line.startswith("DTTX "):
         parts = line.split(maxsplit=2)
+        if len(parts) >= 3 and "=" in parts[2]:
+            field = parts[2].split("=", 1)[0]
+            return f"{parts[0]} {parts[1]} {field}"
         if len(parts) >= 2:
             return f"{parts[0]} {parts[1]}"
     return line
@@ -178,14 +197,14 @@ def build_twoway_status_lines(*, cfg: Config, state: ControllerState) -> List[st
     """
     Lines pushed to RTI Two Way Strings — one logical message per line (LF framed).
 
-    Omits DTSTATUS so RX string slots are not polluted; each DTTX/DTRXSUMMARY line
-    is parsed independently when enableStopByte + stopChar %0a are set in the driver.
+    Omits DTSTATUS. Each line is one field (status or tx-state) or DTRXSUMMARY so RTI
+    receive strings can match without $$*$$ wildcards (enableStopByte + stopChar %0a).
     """
     lines: List[str] = []
     for tx_alias in sorted(cfg.tx_by_alias.keys(), key=tx_alias_sort_key):
         if tx_alias in cfg.tx_skipped_aliases:
             continue
-        lines.append(format_dt_tx_line(state=state, tx_alias=tx_alias))
+        lines.extend(format_dt_tx_rti_lines(state=state, tx_alias=tx_alias))
     lines.append(format_dt_rx_summary_line(cfg=cfg, state=state))
     return lines
 

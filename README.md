@@ -199,7 +199,7 @@ DriverTranslator pushes status to RTI **Two Way Strings** over a **persistent TC
 2. **Network Address** = DriverTranslator host IP (example `100.64.200.21`), **Network Port** = `rti_status.port` (example `4999`).
 3. On integrion, DriverTranslator **listens** on that port (`rti_status.port`, optional `bind_address`, default `0.0.0.0`). `host` is not used for TCP (only for UDP).
 4. **Receive strings** (one **line** per message; v2.7 wildcard `$$*$$`):
-   - `DTTX IN1-BOX1$$*$$` (per TX) — **boolean** fields (see table below)
+   - `DTTX IN1-BOX1 status="` and `DTTX IN1-BOX1 tx-state="` (per TX) — **boolean** fields (see table below)
    - `DTRXSUMMARY$$*$$` — **one string variable** for all RX faults (prefix `DTRXSUMMARY `)
 5. **Framing (required):** In the Two Way driver enable **Stop Byte**, **Stop Character** = `%0a` (line feed). DriverTranslator sends **LF** (`\n`) after each line. Without stop-byte framing, RTI concatenates all lines into one blob and booleans parse incorrectly.
 6. Import/regenerate `.driverconfig` from `tools/generate_rti_twoway_driverconfig.py` (`enableStopByte` = true). `DTSTATUS` is not sent on the Two Way link (no RX slots).
@@ -236,8 +236,9 @@ Example `config.json`:
 
 | Line | Example |
 |------|---------|
-| TX (one per encoder) | `DTTX IN1-BOX1 status="ok" hdmi-state="connected" tx-state="connected"` |
-| TX fault | `DTTX IN2-BOX2 status="error" hdmi-state="no signal" tx-state="connected"` |
+| TX status (one line per TX) | `DTTX IN1-BOX1 status="ok"` |
+| TX AMX link (one line per TX) | `DTTX IN1-BOX1 tx-state="connected"` |
+| TX fault (two lines) | `DTTX IN2-BOX2 status="error"` then `DTTX IN2-BOX2 tx-state="connected"` |
 | RX (all receivers, one line) | `DTRXSUMMARY "All 80 RX OK"` |
 | RX faults | `DTRXSUMMARY "2 RX fault(s): OUT1-TV1 (TV disconnected); OUT5-TV5 (offline)"` |
 
@@ -247,16 +248,14 @@ Quoted fields (same pattern as the Two Way reference `playStatus="playing"`).
 
 | Slot name (example) | Match (`rxString`) | Prefix | Suffix | `rxTrue` (TRUE when extracted value equals) | Meaning |
 |---------------------|--------------------|--------|--------|-------------------------------------------|---------|
-| `IN1-BOX1 error` | `DTTX IN1-BOX1$$*$$` | `status="` | `"` | `error` | HDMI-side / input fault |
-| `IN1-BOX1 offline` | `DTTX IN1-BOX1$$*$$` | `tx-state="` | `"` | `disconnected` | Encoder offline on AMX TCP |
+| `IN1-BOX1 error` | `DTTX IN1-BOX1 status="` | `status="` | `"` | `error` | HDMI-side / input fault |
+| `IN1-BOX1 offline` | `DTTX IN1-BOX1 tx-state="` | `tx-state="` | `"` | `disconnected` | Encoder offline on AMX TCP |
 
-Both booleans use the same match per TX (`DTTX INx-BOxx$$*$$`); different prefix/rxTrue pick `status` vs `tx-state`. Do not put `status="` in the match string — RTI extracts between prefix and suffix from the matched line *after* the match, so `DTTX IN2-BOX2 status="` never updates the boolean even when Last RX shows `status="error"`.
-
-Wire example: `DTTX IN1-BOX1 status="ok" hdmi-state="connected" tx-state="connected"`
+DriverTranslator sends **one line per row** (no wildcard). Each line contains only the field that slot parses, e.g. `DTTX IN2-BOX2 status="error"` and `DTTX IN2-BOX2 tx-state="connected"`.
 
 **RX summary string:** match `DTRXSUMMARY`, prefix `DTRXSUMMARY "`, suffix `"` — e.g. `DTRXSUMMARY "All 80 RX OK"`.
 
-Import ready-made config from `untracked/drivertranslator-twoway-pilot10.driverconfig` (regenerate via `tools/generate_rti_twoway_driverconfig.py`). Example network: DriverTranslator **100.64.200.21:4999** (TCP server), RTI XP6s **100.64.200.22** (TCP client / Two Way “TCP Connection”).
+Import ready-made config from `untracked/drivertranslator-twoway-pilot10.driverconfig` (regenerate via `tools/generate_rti_twoway_driverconfig.py`). The generator writes each `varTypeN` **once** (booleans = `1`) and clears receive-string slots **22–100** so ID merge does not keep an old 51-slot layout. Prefer a **new** Two Way driver instance or empty receive strings before import. Example network: DriverTranslator **100.64.200.21:4999** (TCP server), RTI XP6s **100.64.200.22** (TCP client / Two Way “TCP Connection”).
 
 `hdmi-state` values: `connected`, `disconnected`, `no signal`, `null` (offline). AMX uses `DVIINPUT`/`HDMIINPUT` + `INPUTRES`/`MODE` on the wire.
 
