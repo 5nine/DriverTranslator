@@ -230,6 +230,8 @@ Example `config.json`:
 - `interval_seconds`: legacy (ignored for TCP); no periodic Two Way refresh
 - `on_change`: when true (default), send only changed DTTX/DTRXSUMMARY lines after the initial connect snapshot
 
+**When status is pushed to RTI:** (1) full snapshot when RTI connects on the Two Way TCP port; (2) after each AMX TX/RX poll that changes a line; (3) after matrix route changes. Requires **RTI status telemetry ON** in Controls, RTI **Connected**, and successful TCP send (see `journalctl` for `RTI status: pushed N changed line(s)`).
+
 **Message format** (one **LF**-terminated line per message on the Two Way TCP link):
 
 | Line | Example |

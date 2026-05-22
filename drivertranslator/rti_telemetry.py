@@ -236,15 +236,16 @@ class RtiTwoWayTransport:
                 with contextlib.suppress(Exception):
                     await self._on_inbound_line(line)
 
-    async def send(self, message: str) -> None:
+    async def send(self, message: str) -> bool:
         if not self._telemetry_active():
-            return
+            return False
         payload = message.rstrip("\r\n").encode("utf-8", errors="replace") + RTI_TWOWAY_LINE_END
         if self._protocol == "udp":
             await self._udp_ready.wait()
             if self._udp_transport is not None:
                 self._udp_transport.sendto(payload, (self._host, self._port))
-            return
+                return True
+            return False
         try:
             await asyncio.wait_for(self._tcp_connected.wait(), timeout=self._connect_timeout_s)
         except asyncio.TimeoutError:
@@ -252,23 +253,25 @@ class RtiTwoWayTransport:
                 "RTI Two Way TCP: no client connected; dropped status line (listen port %d)",
                 self._port,
             )
-            return
+            return False
         async with self._tcp_send_lock:
             writer = self._tcp_writer
             if writer is None:
-                return
+                return False
             try:
                 writer.write(payload)
                 await writer.drain()
+                return True
             except Exception:
                 LOG.debug("RTI Two Way TCP send failed", exc_info=True)
+                return False
 
-    async def send_lines(self, lines: list[str]) -> None:
+    async def send_lines(self, lines: list[str]) -> bool:
         """Send multiple LF-terminated lines in one write (full RTI refresh)."""
         if not lines:
-            return
+            return True
         body = "\n".join(line.rstrip("\r\n") for line in lines) + "\n"
-        await self.send(body)
+        return await self.send(body)
 
 
 def _telemetry_config_valid(*, enabled: bool, protocol: str, host: str, port: int) -> bool:

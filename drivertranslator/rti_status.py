@@ -201,6 +201,7 @@ class RtiStatusReporter:
         self._on_change = bool(on_change)
         self._last_sent: Dict[str, str] = {}
         self._push_task: Optional[asyncio.Task[None]] = None
+        self._push_pending = False
 
     async def start(self) -> None:
         await self._sender.start()
@@ -221,18 +222,32 @@ class RtiStatusReporter:
             return
         if self._push_task is not None and not self._push_task.done():
             if not force:
+                self._push_pending = True
                 return
+        self._push_pending = False
         self._push_task = asyncio.create_task(
-            self._push_changes(force=force),
+            self._run_push(force=force),
             name="dt-rti-status-push",
         )
 
+    async def _run_push(self, *, force: bool) -> None:
+        try:
+            await self._push_changes(force=force)
+        finally:
+            if self._push_pending:
+                self._push_pending = False
+                await self._push_changes(force=False)
+
     async def _push_all(self) -> None:
         lines = build_twoway_status_lines(cfg=self._cfg, state=self._state)
-        self._last_sent = {line: line for line in lines}
-        await self._sender.send_lines(lines)
-        if LOG.isEnabledFor(logging.DEBUG):
-            LOG.debug("RTI status: sent %d line(s) (full refresh)", len(lines))
+        if await self._sender.send_lines(lines):
+            self._last_sent = {line: line for line in lines}
+            LOG.info("RTI status: pushed %d line(s) to Two Way (full snapshot)", len(lines))
+        else:
+            LOG.debug(
+                "RTI status: full snapshot not sent (%d line(s); RTI client not connected?)",
+                len(lines),
+            )
 
     async def _push_changes(self, *, force: bool) -> None:
         if not self._runtime.rti_status_enabled:
@@ -243,9 +258,20 @@ class RtiStatusReporter:
         lines = build_twoway_status_lines(cfg=self._cfg, state=self._state)
         changed = [line for line in lines if self._last_sent.get(line) != line]
         if not changed:
+            LOG.debug(
+                "RTI status: no line changes to push (%d DTTX/DTRXSUMMARY line(s) unchanged)",
+                len(lines),
+            )
             return
+        sent = 0
         for line in changed:
-            self._last_sent[line] = line
-            await self._sender.send(line)
-        if LOG.isEnabledFor(logging.DEBUG):
-            LOG.debug("RTI status: sent %d changed line(s)", len(changed))
+            if await self._sender.send(line):
+                self._last_sent[line] = line
+                sent += 1
+        if sent:
+            LOG.info("RTI status: pushed %d changed line(s) to Two Way", sent)
+        elif changed:
+            LOG.debug(
+                "RTI status: %d changed line(s) not sent (RTI Two Way client not connected?)",
+                len(changed),
+            )

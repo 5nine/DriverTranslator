@@ -38,7 +38,7 @@ def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
     slots.append(
         {
             "name": "RXSummary",
-            "match": "DTRXSUMMARY",
+            "match": 'DTRXSUMMARY "',
             "var_type": VAR_STRING,
             "prefix": 'DTRXSUMMARY "',
             "suffix": '"',
@@ -46,11 +46,10 @@ def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
         }
     )
     for alias in tx_aliases:
-        match = f"DTTX {alias}"
         slots.append(
             {
                 "name": f"{alias} error",
-                "match": match,
+                "match": f'DTTX {alias} status="',
                 "var_type": VAR_BOOLEAN,
                 "prefix": 'status="',
                 "suffix": '"',
@@ -60,7 +59,7 @@ def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
         slots.append(
             {
                 "name": f"{alias} offline",
-                "match": match,
+                "match": f'DTTX {alias} tx-state="',
                 "var_type": VAR_BOOLEAN,
                 "prefix": 'tx-state="',
                 "suffix": '"',
