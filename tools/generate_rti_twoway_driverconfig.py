@@ -92,12 +92,8 @@ def _emit_boilerplate(lines: List[str]) -> None:
 
 
 def _xml_escape(s: str) -> str:
-    return (
-        s.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
+    """Escape for XML element text. Keep literal quotes (RTI export uses status=\" not &quot;)."""
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def build_driverconfig(
