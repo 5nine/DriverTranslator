@@ -234,19 +234,23 @@ Example `config.json`:
 
 | Line | Example |
 |------|---------|
-| TX (one per encoder) | `DTTX IN1-BOX1 status=ok hdmi-state=connected tx-state=connected` |
-| TX fault | `DTTX IN2-BOX2 status=error hdmi-state=no signal tx-state=connected` |
-| RX (all receivers, one line) | `DTRXSUMMARY All 80 RX OK` |
-| RX faults | `DTRXSUMMARY 2 RX fault(s): OUT1-TV1 (TV disconnected); OUT5-TV5 (offline)` |
+| TX (one per encoder) | `DTTX IN1-BOX1 status="ok" hdmi-state="connected" tx-state="connected"` |
+| TX fault | `DTTX IN2-BOX2 status="error" hdmi-state="no signal" tx-state="connected"` |
+| RX (all receivers, one line) | `DTRXSUMMARY "All 80 RX OK"` |
+| RX faults | `DTRXSUMMARY "2 RX fault(s): OUT1-TV1 (TV disconnected); OUT5-TV5 (offline)"` |
 
 **TX — two boolean variables per TX (fault = TRUE)**
 
-| Slot name (example) | Prefix | `rxTrue` (TRUE when) | Meaning |
-|---------------------|--------|----------------------|---------|
-| `IN1-BOX1 error` | `status=` | `error` | HDMI-side / input fault (not ok) |
-| `IN1-BOX1 offline` | `tx-state=` | `disconnected` | Encoder not reachable on AMX TCP |
+Quoted fields (same pattern as the Two Way reference `playStatus="playing"`). Match substring: `DTTX IN1-BOX1`.
 
-Healthy: `status=ok` and `tx-state=connected` → both booleans false. Match: `DTTX IN1-BOX1$$*$$` per alias (21 RX strings with summary for 10 TX).
+| Slot name (example) | Prefix | Suffix | `rxTrue` (TRUE when extracted value equals) | Meaning |
+|---------------------|--------|--------|-------------------------------------------|---------|
+| `IN1-BOX1 error` | `status="` | `"` | `error` | HDMI-side / input fault |
+| `IN1-BOX1 offline` | `tx-state="` | `"` | `disconnected` | Encoder offline on AMX TCP |
+
+Wire example: `DTTX IN1-BOX1 status="ok" hdmi-state="connected" tx-state="connected"`
+
+**RX summary string:** match `DTRXSUMMARY`, prefix `DTRXSUMMARY "`, suffix `"` — e.g. `DTRXSUMMARY "All 80 RX OK"`.
 
 Import ready-made config from `untracked/drivertranslator-twoway-pilot10.driverconfig` (regenerate via `tools/generate_rti_twoway_driverconfig.py`). Example network: DriverTranslator **100.64.200.21:4999** (TCP server), RTI XP6s **100.64.200.22** (TCP client / Two Way “TCP Connection”).
 

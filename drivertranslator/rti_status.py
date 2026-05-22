@@ -20,6 +20,12 @@ from .utils import rx_alias_sort_key, tx_alias_sort_key
 LOG = logging.getLogger("drivertranslator")
 
 
+def _rti_quote(value: str) -> str:
+    """Quote a field value for RTI Two Way prefix/suffix parsing (escape embedded double quotes)."""
+    safe = str(value).replace('"', "'")
+    return f'"{safe}"'
+
+
 def _tri_token(v: Optional[bool], *, on: str, off: str, unknown: str = "UNKNOWN") -> str:
     if v is True:
         return on
@@ -93,7 +99,7 @@ def format_dt_rx_summary_line(*, cfg: Config, state: ControllerState) -> str:
         msg = f"{len(faults)} RX fault(s): " + "; ".join(shown)
         if len(faults) > _RX_SUMMARY_MAX_FAULTS:
             msg += f"; +{len(faults) - _RX_SUMMARY_MAX_FAULTS} more"
-    return f"DTRXSUMMARY {msg}"
+    return f"DTRXSUMMARY {_rti_quote(msg)}"
 
 
 def build_tx_rti_fields(*, state: ControllerState, tx_alias: str) -> TxRtiFields:
@@ -124,7 +130,8 @@ def build_tx_rti_fields(*, state: ControllerState, tx_alias: str) -> TxRtiFields
 def format_dt_tx_line(*, state: ControllerState, tx_alias: str) -> str:
     status, hdmi_state, tx_state = build_tx_rti_fields(state=state, tx_alias=tx_alias)
     return (
-        f"DTTX {tx_alias} status={status} hdmi-state={hdmi_state} tx-state={tx_state}"
+        f"DTTX {tx_alias} status={_rti_quote(status)} hdmi-state={_rti_quote(hdmi_state)} "
+        f"tx-state={_rti_quote(tx_state)}"
     )
 
 

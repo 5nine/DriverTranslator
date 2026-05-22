@@ -28,27 +28,32 @@ def _tx_aliases(count: int) -> List[str]:
 
 
 def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
+    """
+    Quoted key=value wire format (same prefix/suffix model as RTI reference driverconfig):
+    extract text between prefix and suffix ", compare to rxTrue for booleans.
+
+    Wire: DTTX IN1-BOX1 status="ok" hdmi-state="connected" tx-state="connected"
+    """
     slots: List[dict] = []
     slots.append(
         {
             "name": "RXSummary",
-            "match": "DTRXSUMMARY$$*$$",
+            "match": "DTRXSUMMARY",
             "var_type": VAR_STRING,
-            "prefix": "DTRXSUMMARY ",
-            "suffix": "",
+            "prefix": 'DTRXSUMMARY "',
+            "suffix": '"',
             "true_value": "",
         }
     )
     for alias in tx_aliases:
-        match = f"DTTX {alias}$$*$$"
-        # Booleans TRUE on fault. Two states only: HDMI-side fault vs encoder offline.
+        match = f"DTTX {alias}"
         slots.append(
             {
                 "name": f"{alias} error",
                 "match": match,
                 "var_type": VAR_BOOLEAN,
-                "prefix": "status=",
-                "suffix": " ",
+                "prefix": 'status="',
+                "suffix": '"',
                 "true_value": "error",
             }
         )
@@ -57,8 +62,8 @@ def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
                 "name": f"{alias} offline",
                 "match": match,
                 "var_type": VAR_BOOLEAN,
-                "prefix": "tx-state=",
-                "suffix": " ",
+                "prefix": 'tx-state="',
+                "suffix": '"',
                 "true_value": "disconnected",
             }
         )
@@ -112,15 +117,14 @@ def build_driverconfig(
     _emit_boilerplate(lines)
 
     for idx, slot in enumerate(slots, start=1):
+        lines.append(f'\t\t<setting variable="rxPrefix{idx}">{_xml_escape(slot["prefix"])}</setting>')
+        lines.append(f'\t\t<setting variable="rxSuffix{idx}">{_xml_escape(slot["suffix"])}</setting>')
         lines.append(f'\t\t<setting variable="rxString{idx}">{_xml_escape(slot["match"])}</setting>')
         lines.append(
             f'\t\t<setting variable="rxString{idx}Name">{_xml_escape(slot["name"])}</setting>'
         )
-        lines.append(f'\t\t<setting variable="rxPrefix{idx}">{_xml_escape(slot["prefix"])}</setting>')
-        lines.append(f'\t\t<setting variable="rxSuffix{idx}">{_xml_escape(slot["suffix"])}</setting>')
         lines.append(f'\t\t<setting variable="varType{idx}">{slot["var_type"]}</setting>')
         if slot["var_type"] == VAR_BOOLEAN and slot["true_value"]:
-            # RTI export name for boolean "true" text varies by ID build; verify in UI after import.
             lines.append(
                 f'\t\t<setting variable="rxTrue{idx}">{_xml_escape(slot["true_value"])}</setting>'
             )
