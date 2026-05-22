@@ -15,6 +15,7 @@ LOG = logging.getLogger("drivertranslator")
 RTI_TWOWAY_LINE_END = b"\n"
 
 OnInboundLine = Callable[[str], Awaitable[None]]
+OnClientEvent = Callable[[], Awaitable[None]]
 
 
 class RtiTwoWayTransport:
@@ -38,6 +39,8 @@ class RtiTwoWayTransport:
         port: int,
         bind_address: Optional[str] = None,
         on_inbound_line: Optional[OnInboundLine] = None,
+        on_client_connected: Optional[OnClientEvent] = None,
+        on_client_disconnected: Optional[OnClientEvent] = None,
         runtime: Optional["RuntimeSettings"] = None,
         connect_timeout_s: float = 5.0,
         reconnect_delay_s: float = 2.0,
@@ -48,6 +51,8 @@ class RtiTwoWayTransport:
         self._port = int(port)
         self._bind_address = bind_address
         self._on_inbound_line = on_inbound_line
+        self._on_client_connected = on_client_connected
+        self._on_client_disconnected = on_client_disconnected
         self._connect_timeout_s = max(0.5, float(connect_timeout_s))
         self._reconnect_delay_s = max(0.5, float(reconnect_delay_s))
         self._udp_transport: Optional[asyncio.DatagramTransport] = None
@@ -71,6 +76,15 @@ class RtiTwoWayTransport:
     @property
     def protocol(self) -> str:
         return self._protocol
+
+    def set_client_hooks(
+        self,
+        *,
+        on_connected: Optional[OnClientEvent] = None,
+        on_disconnected: Optional[OnClientEvent] = None,
+    ) -> None:
+        self._on_client_connected = on_connected
+        self._on_client_disconnected = on_disconnected
 
     async def start(self) -> None:
         if not self._enabled:
@@ -160,6 +174,9 @@ class RtiTwoWayTransport:
         peer = writer.get_extra_info("peername")
         LOG.info("RTI Two Way Strings TCP client connected from %s", peer)
         await self._set_tcp_client(reader, writer)
+        if self._on_client_connected is not None:
+            with contextlib.suppress(Exception):
+                await self._on_client_connected()
         try:
             await self._tcp_read_loop(reader)
         except asyncio.CancelledError:
@@ -168,6 +185,9 @@ class RtiTwoWayTransport:
             LOG.debug("RTI Two Way TCP read ended (%s)", peer, exc_info=True)
         finally:
             await self._drop_tcp_client(reader, writer)
+            if self._on_client_disconnected is not None:
+                with contextlib.suppress(Exception):
+                    await self._on_client_disconnected()
             LOG.info("RTI Two Way Strings TCP client disconnected (%s)", peer)
 
     async def _set_tcp_client(

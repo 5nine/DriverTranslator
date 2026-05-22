@@ -136,25 +136,26 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         health=health,
         runtime=runtime,
         sender=rti_status_sender,
-        interval_seconds=cfg.rti_status_interval_seconds,
         on_change=cfg.rti_status_on_change,
+    )
+    rti_status_sender.set_client_hooks(
+        on_connected=rti_status.on_client_connected,
+        on_disconnected=rti_status.on_client_disconnected,
     )
     await rti_status.start()
     if cfg.rti_status_enabled and cfg.rti_status_port > 0:
         if cfg.rti_status_protocol == "udp" and cfg.rti_status_host:
             LOG.info(
-                "RTI status telemetry enabled (UDP -> %s:%d, interval=%ds)",
+                "RTI status telemetry enabled (UDP -> %s:%d, on connect + on change)",
                 cfg.rti_status_host,
                 cfg.rti_status_port,
-                cfg.rti_status_interval_seconds,
             )
         elif cfg.rti_status_protocol != "udp":
             bind = cfg.rti_status_bind_address or "0.0.0.0"
             LOG.info(
-                "RTI status telemetry enabled (TCP listen %s:%d, interval=%ds)",
+                "RTI status telemetry enabled (TCP listen %s:%d, on connect + on change)",
                 bind,
                 cfg.rti_status_port,
-                cfg.rti_status_interval_seconds,
             )
 
     async def _run_startup_self_test() -> None:
@@ -205,7 +206,6 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
             await refresh_rx_statuses(cfg=cfg, state=state, runtime=runtime, status_reporter=rti_status)
         except Exception:
             LOG.exception("Startup AMX RX status poll failed")
-        rti_status.schedule_push(force=True)
 
     if cfg.http_status_enabled:
         http_server = await asyncio.start_server(

@@ -172,8 +172,8 @@ class RtiStatusReporter:
     """
     Push status to RTI Two Way Strings (TCP persistent link).
 
-    - Per-TX DTTX lines (boolean-friendly key=value fields for Integration Designer)
-    - One DTRXSUMMARY line for all RX (human-readable string; not per-RX booleans)
+    Sends a full snapshot when RTI connects; thereafter only changed DTTX/DTRXSUMMARY
+    lines (AMX poll / matrix). No periodic refresh timer.
     """
 
     def __init__(
@@ -184,7 +184,6 @@ class RtiStatusReporter:
         health: HealthState,
         runtime: RuntimeSettings,
         sender: RtiTwoWayTransport,
-        interval_seconds: int,
         on_change: bool = True,
     ) -> None:
         self._cfg = cfg
@@ -192,15 +191,23 @@ class RtiStatusReporter:
         self._health = health
         self._runtime = runtime
         self._sender = sender
-        self._interval = max(1, int(interval_seconds))
         self._on_change = bool(on_change)
         self._last_sent: Dict[str, str] = {}
-        self._loop_task: Optional[asyncio.Task[None]] = None
         self._push_task: Optional[asyncio.Task[None]] = None
 
     async def start(self) -> None:
         await self._sender.start()
-        self._loop_task = asyncio.create_task(self._loop(), name="dt-rti-status-reporter")
+
+    async def on_client_connected(self) -> None:
+        """Full status snapshot when RTI Two Way TCP client attaches."""
+        if not self._runtime.rti_status_enabled:
+            return
+        self._last_sent.clear()
+        await self._push_all()
+        LOG.info("RTI status: sent full snapshot on Two Way connect")
+
+    async def on_client_disconnected(self) -> None:
+        self._last_sent.clear()
 
     def schedule_push(self, *, force: bool = False) -> None:
         if not self._sender.enabled:
@@ -212,16 +219,6 @@ class RtiStatusReporter:
             self._push_changes(force=force),
             name="dt-rti-status-push",
         )
-
-    async def _loop(self) -> None:
-        while True:
-            await asyncio.sleep(self._interval)
-            if not self._runtime.rti_status_enabled:
-                continue
-            try:
-                await self._push_all()
-            except Exception:
-                LOG.exception("RTI status periodic push failed")
 
     async def _push_all(self) -> None:
         lines = build_twoway_status_lines(cfg=self._cfg, state=self._state)

@@ -1529,7 +1529,7 @@ async def handle_http_client(
       </div>
     </div>
     <div class="row">
-      <div><b>RTI status telemetry</b><span class="help-icon" title="When ON, pushes DTTX lines per TX (for RTI boolean variables) and one DTRXSUMMARY text line for all RX faults over TCP when RTI connects to the Two Way listen port (rti_status.port on this host).">?</span></div>
+      <div><b>RTI status telemetry</b><span class="help-icon" title="When ON, sends a full DTTX/DTRXSUMMARY snapshot when RTI connects to the Two Way TCP port, then only changed lines (AMX poll / matrix). No periodic refresh.">?</span></div>
       <div class="ctrl-actions">
         <code id="st_rti_status">{str(rt.get('rti_status_enabled', False)).lower()}</code>
         <button type="button" class="ctrl-run" data-dt-ctl="set" data-key="rti_status_enabled" data-value="{'false' if rt.get('rti_status_enabled', False) else 'true'}">Toggle</button>

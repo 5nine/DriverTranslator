@@ -203,7 +203,7 @@ DriverTranslator pushes status to RTI **Two Way Strings** over a **persistent TC
    - `DTRXSUMMARY$$*$$` — **one string variable** for all RX faults (prefix `DTRXSUMMARY `)
 5. **Framing (required):** In the Two Way driver enable **Stop Byte**, **Stop Character** = `%0a` (line feed). DriverTranslator sends **LF** (`\n`) after each line. Without stop-byte framing, RTI concatenates all lines into one blob and booleans parse incorrectly.
 6. Import/regenerate `.driverconfig` from `tools/generate_rti_twoway_driverconfig.py` (`enableStopByte` = true). `DTSTATUS` is not sent on the Two Way link (no RX slots).
-7. **PING** in the Two Way driver is RTI **polling the device**; DriverTranslator instead **pushes** status on an interval. Set **PING Time = 0**.
+7. **PING** in the Two Way driver is RTI **polling the device**; DriverTranslator **pushes** a full snapshot when RTI connects, then only changed lines. Set **PING Time = 0**.
 
 **Inbound commands (future):** DriverTranslator already reads lines from RTI on the same TCP socket and logs them (`handle_inbound_twoway_line`). Add RTI **Transmit / Command strings** when you are ready to send commands to DriverTranslator on that link.
 
@@ -227,8 +227,8 @@ Example `config.json`:
 - `port`: TCP **listen** port on DriverTranslator (RTI XP connects here as client)
 - `bind_address`: optional bind IP (default all interfaces); ignored for TCP `host`
 - `host`: RTI destination IP — **UDP only**
-- `interval_seconds`: full refresh (default 30)
-- `on_change`: also send when status changes (AMX poll or matrix route)
+- `interval_seconds`: legacy (ignored for TCP); no periodic Two Way refresh
+- `on_change`: when true (default), send only changed DTTX/DTRXSUMMARY lines after the initial connect snapshot
 
 **Message format** (one **LF**-terminated line per message on the Two Way TCP link):
 
