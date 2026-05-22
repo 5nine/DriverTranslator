@@ -34,7 +34,8 @@ def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
 
     Wire: DTTX IN1-BOX1 status="ok" hdmi-state="connected" tx-state="connected"
 
-    Offline uses v2.7 wildcard ($$*$$) because status/hdmi fields sit between alias and tx-state.
+    Both TX booleans use v2.7 wildcard ($$*$$): fields sit between alias and later keys, and
+    rxString must not include the prefix or RTI cannot extract the value after the match.
     """
     slots: List[dict] = []
     slots.append(
@@ -51,7 +52,7 @@ def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
         slots.append(
             {
                 "name": f"{alias} error",
-                "match": f'DTTX {alias} status="',
+                "match": f"DTTX {alias}$$*$$",
                 "var_type": VAR_BOOLEAN,
                 "prefix": 'status="',
                 "suffix": '"',

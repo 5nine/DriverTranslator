@@ -247,10 +247,10 @@ Quoted fields (same pattern as the Two Way reference `playStatus="playing"`).
 
 | Slot name (example) | Match (`rxString`) | Prefix | Suffix | `rxTrue` (TRUE when extracted value equals) | Meaning |
 |---------------------|--------------------|--------|--------|-------------------------------------------|---------|
-| `IN1-BOX1 error` | `DTTX IN1-BOX1 status="` | `status="` | `"` | `error` | HDMI-side / input fault |
+| `IN1-BOX1 error` | `DTTX IN1-BOX1$$*$$` | `status="` | `"` | `error` | HDMI-side / input fault |
 | `IN1-BOX1 offline` | `DTTX IN1-BOX1$$*$$` | `tx-state="` | `"` | `disconnected` | Encoder offline on AMX TCP |
 
-Offline needs wildcard because `status` and `hdmi-state` appear before `tx-state` on the wire line. The alias in the match ties the slot to that TX only (other TX lines use their own alias).
+Both booleans use the same match per TX (`DTTX INx-BOxx$$*$$`); different prefix/rxTrue pick `status` vs `tx-state`. Do not put `status="` in the match string — RTI extracts between prefix and suffix from the matched line *after* the match, so `DTTX IN2-BOX2 status="` never updates the boolean even when Last RX shows `status="error"`.
 
 Wire example: `DTTX IN1-BOX1 status="ok" hdmi-state="connected" tx-state="connected"`
 
