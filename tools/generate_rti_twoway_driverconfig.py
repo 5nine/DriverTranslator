@@ -33,6 +33,8 @@ def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
     extract text between prefix and suffix ", compare to rxTrue for booleans.
 
     Wire: DTTX IN1-BOX1 status="ok" hdmi-state="connected" tx-state="connected"
+
+    Offline uses v2.7 wildcard ($$*$$) because status/hdmi fields sit between alias and tx-state.
     """
     slots: List[dict] = []
     slots.append(
@@ -59,7 +61,7 @@ def _slot_definitions(tx_aliases: List[str]) -> List[dict]:
         slots.append(
             {
                 "name": f"{alias} offline",
-                "match": f'DTTX {alias} tx-state="',
+                "match": f"DTTX {alias}$$*$$",
                 "var_type": VAR_BOOLEAN,
                 "prefix": 'tx-state="',
                 "suffix": '"',

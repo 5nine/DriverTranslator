@@ -243,12 +243,14 @@ Example `config.json`:
 
 **TX — two boolean variables per TX (fault = TRUE)**
 
-Quoted fields (same pattern as the Two Way reference `playStatus="playing"`). Match substring: `DTTX IN1-BOX1`.
+Quoted fields (same pattern as the Two Way reference `playStatus="playing"`).
 
-| Slot name (example) | Prefix | Suffix | `rxTrue` (TRUE when extracted value equals) | Meaning |
-|---------------------|--------|--------|-------------------------------------------|---------|
-| `IN1-BOX1 error` | `status="` | `"` | `error` | HDMI-side / input fault |
-| `IN1-BOX1 offline` | `tx-state="` | `"` | `disconnected` | Encoder offline on AMX TCP |
+| Slot name (example) | Match (`rxString`) | Prefix | Suffix | `rxTrue` (TRUE when extracted value equals) | Meaning |
+|---------------------|--------------------|--------|--------|-------------------------------------------|---------|
+| `IN1-BOX1 error` | `DTTX IN1-BOX1 status="` | `status="` | `"` | `error` | HDMI-side / input fault |
+| `IN1-BOX1 offline` | `DTTX IN1-BOX1$$*$$` | `tx-state="` | `"` | `disconnected` | Encoder offline on AMX TCP |
+
+Offline needs wildcard because `status` and `hdmi-state` appear before `tx-state` on the wire line. The alias in the match ties the slot to that TX only (other TX lines use their own alias).
 
 Wire example: `DTTX IN1-BOX1 status="ok" hdmi-state="connected" tx-state="connected"`
 
