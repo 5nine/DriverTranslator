@@ -159,6 +159,21 @@ def build_device_status_lines(
     return lines
 
 
+def _twoway_line_key(line: str) -> str:
+    """Stable key per TX / summary so ok→error→ok still triggers a push."""
+    if line.startswith("DTRXSUMMARY"):
+        return "DTRXSUMMARY"
+    if line.startswith("DTTX "):
+        parts = line.split(maxsplit=2)
+        if len(parts) >= 2:
+            return f"{parts[0]} {parts[1]}"
+    return line
+
+
+def _index_twoway_lines(lines: List[str]) -> Dict[str, str]:
+    return {_twoway_line_key(line): line for line in lines}
+
+
 def build_twoway_status_lines(*, cfg: Config, state: ControllerState) -> List[str]:
     """
     Lines pushed to RTI Two Way Strings — one logical message per line (LF framed).
@@ -241,7 +256,7 @@ class RtiStatusReporter:
     async def _push_all(self) -> None:
         lines = build_twoway_status_lines(cfg=self._cfg, state=self._state)
         if await self._sender.send_lines(lines):
-            self._last_sent = {line: line for line in lines}
+            self._last_sent = _index_twoway_lines(lines)
             LOG.info("RTI status: pushed %d line(s) to Two Way (full snapshot)", len(lines))
         else:
             LOG.debug(
@@ -256,7 +271,8 @@ class RtiStatusReporter:
             await self._push_all()
             return
         lines = build_twoway_status_lines(cfg=self._cfg, state=self._state)
-        changed = [line for line in lines if self._last_sent.get(line) != line]
+        current = _index_twoway_lines(lines)
+        changed = [current[k] for k in current if self._last_sent.get(k) != current[k]]
         if not changed:
             LOG.debug(
                 "RTI status: no line changes to push (%d DTTX/DTRXSUMMARY line(s) unchanged)",
@@ -265,8 +281,9 @@ class RtiStatusReporter:
             return
         sent = 0
         for line in changed:
+            key = _twoway_line_key(line)
             if await self._sender.send(line):
-                self._last_sent[line] = line
+                self._last_sent[key] = line
                 sent += 1
         if sent:
             LOG.info("RTI status: pushed %d changed line(s) to Two Way", sent)
