@@ -48,7 +48,13 @@ from .models import (
 )
 from .problem_reporter import LocalProblemReporter
 from .protocol_helpers import format_tx_signal
-from .system_control import do_reboot, do_service_restart
+from .system_control import (
+    MANUAL_REBOOT_MESSAGE,
+    MANUAL_RESTART_MESSAGE,
+    can_self_manage,
+    do_reboot,
+    do_service_restart,
+)
 from .unknown_ctl import (
     clear_persisted as unknown_ctl_clear_persisted,
     page_text as unknown_ctl_page_text,
@@ -671,49 +677,91 @@ async def handle_http_client(
                 return
 
             if path.startswith("/control/restart"):
+                manual = not can_self_manage()
                 if params_want_html(params):
-                    writer.write(
-                        http_response(
-                            "200 OK",
-                            "text/html; charset=utf-8",
-                            control_feedback_html(
-                                ok=True,
-                                headline="Service restart scheduled",
-                                paragraphs=[
-                                    "DriverTranslator service will restart shortly.",
-                                    "This page connection may briefly drop while the process restarts.",
-                                ],
-                            ),
+                    if manual:
+                        writer.write(
+                            http_response(
+                                "200 OK",
+                                "text/html; charset=utf-8",
+                                control_feedback_html(
+                                    ok=False,
+                                    headline="Manual restart required",
+                                    paragraphs=[MANUAL_RESTART_MESSAGE],
+                                ),
+                            )
                         )
-                    )
+                    else:
+                        writer.write(
+                            http_response(
+                                "200 OK",
+                                "text/html; charset=utf-8",
+                                control_feedback_html(
+                                    ok=True,
+                                    headline="Service restart scheduled",
+                                    paragraphs=[
+                                        "DriverTranslator service will restart shortly.",
+                                        "This page connection may briefly drop while the process restarts.",
+                                    ],
+                                ),
+                            )
+                        )
                 else:
-                    body = (json.dumps({"ok": True, "action": "service_restart"}, indent=2) + "\n").encode("utf-8")
+                    payload = {"ok": True, "action": "service_restart"}
+                    if manual:
+                        payload["manual"] = True
+                        payload["message"] = MANUAL_RESTART_MESSAGE
+                    body = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
                     writer.write(http_response("200 OK", "application/json", body))
-                LOG.warning("HTTP control [source=%s]: service restart requested", ctl_via)
-                asyncio.create_task(do_service_restart(reason=f"http_control:{ctl_via}"))
+                if manual:
+                    LOG.warning("HTTP control [source=%s]: service restart requested but not supported; manual action required", ctl_via)
+                else:
+                    LOG.warning("HTTP control [source=%s]: service restart requested", ctl_via)
+                    asyncio.create_task(do_service_restart(reason=f"http_control:{ctl_via}"))
                 return
 
             if path.startswith("/control/reboot"):
+                manual = not can_self_manage()
                 if params_want_html(params):
-                    writer.write(
-                        http_response(
-                            "200 OK",
-                            "text/html; charset=utf-8",
-                            control_feedback_html(
-                                ok=True,
-                                headline="Reboot scheduled",
-                                paragraphs=[
-                                    "The machine will restart shortly. This page and SSH will drop until the system is back.",
-                                    "Open the status page again after boot if you need to confirm the service.",
-                                ],
-                            ),
+                    if manual:
+                        writer.write(
+                            http_response(
+                                "200 OK",
+                                "text/html; charset=utf-8",
+                                control_feedback_html(
+                                    ok=False,
+                                    headline="Manual reboot required",
+                                    paragraphs=[MANUAL_REBOOT_MESSAGE],
+                                ),
+                            )
                         )
-                    )
+                    else:
+                        writer.write(
+                            http_response(
+                                "200 OK",
+                                "text/html; charset=utf-8",
+                                control_feedback_html(
+                                    ok=True,
+                                    headline="Reboot scheduled",
+                                    paragraphs=[
+                                        "The machine will restart shortly. This page and SSH will drop until the system is back.",
+                                        "Open the status page again after boot if you need to confirm the service.",
+                                    ],
+                                ),
+                            )
+                        )
                 else:
-                    body = (json.dumps({"ok": True, "action": "rebooting"}, indent=2) + "\n").encode("utf-8")
+                    payload = {"ok": True, "action": "rebooting"}
+                    if manual:
+                        payload["manual"] = True
+                        payload["message"] = MANUAL_REBOOT_MESSAGE
+                    body = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
                     writer.write(http_response("200 OK", "application/json", body))
-                LOG.warning("HTTP control [source=%s]: host reboot requested", ctl_via)
-                asyncio.create_task(do_reboot(reason=f"http_control:{ctl_via}"))
+                if manual:
+                    LOG.warning("HTTP control [source=%s]: host reboot requested but not supported; manual action required", ctl_via)
+                else:
+                    LOG.warning("HTTP control [source=%s]: host reboot requested", ctl_via)
+                    asyncio.create_task(do_reboot(reason=f"http_control:{ctl_via}"))
                 return
 
             writer.write(http_response("404 Not Found", "text/plain", b"not found"))
@@ -1744,7 +1792,14 @@ async def handle_http_client(
           showModal(false, 'Failed', (j && j.error) ? j.error : (t.slice(0, 200) || r.status + ' ' + r.statusText));
           return;
         }}
-        showModal(true, okTitle, getDetail(j, t));
+        // A `manual` flag means the host can't perform the action itself
+        // (e.g. reboot/restart on Windows) and the operator must do it.
+        if (j && j.manual) {{
+          showModal(false, 'Manual action required', j.message || 'This action must be performed manually on this host.');
+          return;
+        }}
+        const title = (typeof okTitle === 'function') ? okTitle(j, t) : okTitle;
+        showModal(true, title, getDetail(j, t));
       }}
 
       document.querySelectorAll('[data-dt-ctl="set"]').forEach((btn) => {{
