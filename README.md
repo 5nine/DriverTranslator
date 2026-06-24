@@ -117,6 +117,29 @@ During the installer you can choose:
 
 ---
 
+## Run on Windows
+
+The translator itself is pure-Python (standard library only — no third-party packages) and runs on Windows. Only the Linux installer (`linux/`, systemd, netplan) is Linux-specific; on Windows you run the module directly.
+
+1. Install **Python 3** (3.10+) from python.org, checking “Add Python to PATH”.
+2. Copy `config.example.json` (or `config.emulator.json` for bench testing) to `config.json` and edit it.
+3. Run from a terminal in the repo folder:
+
+```powershell
+python -m drivertranslator --config config.json --listen 0.0.0.0 --port 2323 --log-level INFO
+```
+
+4. Allow the listening ports through **Windows Firewall**: control `2323` (TCP), status page `8080` (TCP), and optional UDP reboot `30003`.
+5. Static-IP / dual-NIC (control + AVoIP) setup is done in **Windows network settings** instead of netplan. Set `amx.bind_address` in `config.json` to the AVoIP NIC IP.
+
+To start automatically, run it as a Windows service (e.g. via [NSSM](https://nssm.cc/) or `sc.exe`) or a Task Scheduler entry at logon/boot.
+
+### Reboot / Restart buttons on Windows
+
+The status page’s **Reboot host** and **Restart DriverTranslator** controls drive `systemctl` and therefore only act automatically on Linux. On Windows (or any non-systemd host) clicking them does **not** reboot/restart; instead the page reports **“Manual action required”** and asks the operator to reboot the machine or restart the process/service manually.
+
+---
+
 ## Monitor / logs
 
 - **Service status**
