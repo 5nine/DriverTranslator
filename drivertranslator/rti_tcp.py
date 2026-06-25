@@ -22,6 +22,16 @@ from .unknown_ctl import record as unknown_ctl_record
 
 LOG = logging.getLogger("drivertranslator")
 
+_DISCONNECT_ERRORS = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, OSError)
+
+
+async def _close_stream_writer(writer: asyncio.StreamWriter) -> None:
+    if not writer.is_closing():
+        writer.close()
+    with contextlib.suppress(*_DISCONNECT_ERRORS):
+        await writer.wait_closed()
+
+
 async def handle_client(
     cfg: Config,
     amx: Any,
@@ -43,6 +53,18 @@ async def handle_client(
         if runtime.expanded_log:
             LOG.info("RTI <- %s", resp_line)
         writer.write(wire)
+
+    async def _write_matrix_set_ack(cmd_line: str) -> None:
+        # WyreStorm: normalized command mirror + one blank line (CRLF CRLF).
+        _write_rti_line(" ".join(cmd_line.split()))
+        _write_rti_line("")
+        await writer.drain()
+
+    writer.write(b"Welcome to NetworkHD\r\n")
+    if runtime.expanded_log:
+        LOG.info("RTI <- Welcome to NetworkHD")
+    with contextlib.suppress(Exception):
+        await writer.drain()
 
     async def _read_protocol_line() -> Optional[str]:
         """
@@ -181,8 +203,7 @@ async def handle_client(
                     notifier,
                     status_reporter,
                 )
-                _write_rti_line(outcome.rti_response)
-                await writer.drain()
+                await _write_matrix_set_ack(outcome.rti_response)
                 continue
 
             # Breakaway switching
@@ -273,10 +294,7 @@ async def handle_client(
                             # Be conservative: if AMX routing errored, don't keep an optimistic video route.
                             state.set_breakaway(kind="video", tx_alias=None, rx_aliases=rx_aliases)
 
-                    # For matrix <kind> set, mirror the raw incoming command exactly.
-                    # old (normalized mirror): _write_rti_line(line_norm)
-                    _write_rti_line(line)  # command mirror ack
-                    await writer.drain()
+                    await _write_matrix_set_ack(line)
                     continue
 
             # Matrix query commands used for RTI feedback variables
@@ -506,9 +524,9 @@ async def handle_client(
             _write_rti_line("unknown command")
             await writer.drain()
 
+    except _DISCONNECT_ERRORS:
+        pass
     finally:
         LOG.info("RTI disconnected from %s", peer)
         health.rti_clients = max(0, health.rti_clients - 1)
-        writer.close()
-        with contextlib.suppress(Exception):
-            await writer.wait_closed()
+        await _close_stream_writer(writer)
