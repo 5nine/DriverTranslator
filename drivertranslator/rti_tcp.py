@@ -60,7 +60,15 @@ async def handle_client(
         _write_rti_line("")
         await writer.drain()
 
-    writer.write(b"Welcome to NetworkHD\r\n")
+    async def _write_block_terminator(blank_lines: int) -> None:
+        for _ in range(blank_lines):
+            _write_rti_line("")
+        await writer.drain()
+
+    # WyreStorm sends this banner on connect. RTI treats each server block as
+    # complete only after CRLF+blank-line framing; a lone CRLF after welcome can
+    # leave the driver mid-read when config get name returns next.
+    writer.write(b"Welcome to NetworkHD\r\n\r\n")
     if runtime.expanded_log:
         LOG.info("RTI <- Welcome to NetworkHD")
     with contextlib.suppress(Exception):
@@ -323,11 +331,7 @@ async def handle_client(
                     for resp_line in matrix_lines:
                         _write_rti_line(resp_line)
                         await writer.drain()
-                    # Match observed WyreStorm framing: terminate matrix blocks with blank lines.
-                    _write_rti_line("")
-                    await writer.drain()
-                    _write_rti_line("")
-                    await writer.drain()
+                    await _write_block_terminator(2)
                     continue
                 # Examples:
                 # matrix video get [<RX...>]
@@ -369,11 +373,7 @@ async def handle_client(
                     for resp_line in matrix_lines:
                         _write_rti_line(resp_line)
                         await writer.drain()
-                    # Match observed WyreStorm framing: terminate matrix blocks with blank lines.
-                    _write_rti_line("")
-                    await writer.drain()
-                    _write_rti_line("")
-                    await writer.drain()
+                    await _write_block_terminator(2)
                     continue
 
             if lower.startswith("config set session alias "):
@@ -466,12 +466,10 @@ async def handle_client(
                 for resp_line in _cg_out:
                     _write_rti_line(resp_line)
                     await writer.drain()
-                # Match observed WyreStorm framing for multi-line config get responses.
-                if len(_cg_out) > 1 and _cg_out != ["unknown command"]:
-                    _write_rti_line("")
-                    await writer.drain()
-                    _write_rti_line("")
-                await writer.drain()
+                # WyreStorm: short config get blocks end with one blank line; large
+                # multi-line blocks (e.g. config get name) end with two.
+                if _cg_out != ["unknown command"] and _cg_out:
+                    await _write_block_terminator(2 if len(_cg_out) > 2 else 1)
                 continue
 
             # Safe mirrors / minimal responses for RTI driver feature surface.
