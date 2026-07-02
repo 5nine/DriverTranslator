@@ -48,6 +48,7 @@ from .models import (
 )
 from .problem_reporter import LocalProblemReporter
 from .rti_status import RtiStatusReporter
+from . import staff_notes
 from .protocol_helpers import format_tx_signal
 from .system_control import (
     MANUAL_REBOOT_MESSAGE,
@@ -66,8 +67,29 @@ from .utils import as_bool, rx_alias_sort_key, tx_alias_sort_key
 
 LOG = logging.getLogger("drivertranslator")
 
+_HTTP_STATUS_LINES = {
+    200: "200 OK",
+    400: "400 Bad Request",
+    405: "405 Method Not Allowed",
+}
+
 _ASSET_INTEGRION_LOGO_PATH = Path(__file__).resolve().parents[1] / "Integrion_logo.png"
 _ASSET_CONDUCTOR1_LOGO_PATH = Path(__file__).resolve().parents[1] / "Conductor1.png"
+
+
+async def _read_http_body(reader: asyncio.StreamReader, data: bytes) -> bytes:
+    _, _, body = data.partition(b"\r\n\r\n")
+    content_length = 0
+    for line in data.split(b"\r\n")[1:]:
+        if line.lower().startswith(b"content-length:"):
+            try:
+                content_length = int(line.split(b":", 1)[1].strip())
+            except ValueError:
+                pass
+            break
+    if content_length > len(body):
+        body += await reader.read(content_length - len(body))
+    return body[:content_length] if content_length else body
 
 
 async def handle_http_client(
@@ -105,6 +127,7 @@ async def handle_http_client(
         control_via_ui = path_only.startswith("/control/") and http_ui_sess_valid(
             early_params.get("ui_sess", "")
         )
+        notes_public = path_only == "/anteckningar" or path_only == "/anteckningar/api"
 
         if path_only == "/assets/integrion_logo.png":
             try:
@@ -124,12 +147,24 @@ async def handle_http_client(
             writer.write(http_response("200 OK", "image/png", body))
             return
 
-        # Require Basic auth (except /control/* with valid ui_sess from this session's status page).
+        # Require Basic auth (except /control/* with valid ui_sess, and staff notes).
         if cfg.http_status_password:
             pw = parse_basic_auth_password(data)
-            if pw != cfg.http_status_password and not control_via_ui:
+            if pw != cfg.http_status_password and not control_via_ui and not notes_public:
                 writer.write(http_unauthorized())
                 return
+
+        if path_only == "/anteckningar" and method == "GET":
+            writer.write(http_response("200 OK", "text/html; charset=utf-8", staff_notes.page_html()))
+            return
+
+        if path_only == "/anteckningar/api":
+            body = b""
+            if method == "POST":
+                body = await _read_http_body(reader, data)
+            code, content_type, resp_body = staff_notes.handle_api(method, body)
+            writer.write(http_response(_HTTP_STATUS_LINES.get(code, f"{code}"), content_type, resp_body))
+            return
 
         if method != "GET":
             writer.write(http_response("405 Method Not Allowed", "text/plain", b"method not allowed"))

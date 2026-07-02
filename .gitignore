@@ -17,6 +17,10 @@ ENV/
 # Local config (keep example committed)
 config.json
 
+# Runtime data files (created at runtime, not committed)
+staff_notes.json
+unknown_ctl.json
+
 # OS / editor
 .DS_Store
 Thumbs.db
