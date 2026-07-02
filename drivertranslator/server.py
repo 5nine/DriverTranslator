@@ -17,6 +17,7 @@ from .rti_status import RtiStatusReporter
 from .rti_tcp import handle_client
 from .rti_telemetry import RtiTwoWayTransport, handle_inbound_twoway_line
 from .unknown_ctl import configure as unknown_ctl_configure, load_from_disk as unknown_ctl_load_from_disk
+from .staff_notes import configure as staff_notes_configure, load_from_disk as staff_notes_load_from_disk
 from .utils import tx_alias_sort_key
 
 LOG = logging.getLogger("drivertranslator")
@@ -31,6 +32,8 @@ async def run_server(*, cfg: Config, config_path: str, listen: str, port: int) -
         persist_path=cfg.unknown_ctl_persist_path,
     )
     unknown_ctl_load_from_disk()
+    staff_notes_configure(config_dir=_cfg_dir)
+    staff_notes_load_from_disk()
     # Optional RTI UDP control listener (e.g., reboot command)
     if cfg.rti_control_enabled and cfg.rti_control_port > 0:
         loop = asyncio.get_running_loop()
