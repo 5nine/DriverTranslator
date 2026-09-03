@@ -10,7 +10,12 @@ This project targets **WyreStorm NetworkHD 120 series naming** (`NHD-120-TX...`,
 
 ### Production freeze
 
-This codebase is **production-ready and frozen** (in use for months). Prefer **critical bugfixes only** — no feature work or refactors here. For new UI (e.g. reusing staff notes), copy from this tree into a new project rather than changing DriverTranslator. Tagged release: `v1.0-production`.
+This codebase is **production-ready and frozen** (in use for months). Prefer **critical bugfixes only** — no feature work or refactors here. For new UI (e.g. reusing staff notes), copy from this tree into a new project rather than changing DriverTranslator.
+
+Frozen production branches and tags:
+
+- `feature/rti-telemetry-windows` → `v1.0-production`
+- `feature/rti-telemetry` → `v1.0-production-telemetry`
 
 ---
 
