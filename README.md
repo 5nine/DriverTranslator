@@ -8,6 +8,10 @@ DriverTranslator is a small Linux service that:
 
 This project targets **WyreStorm NetworkHD 120 series naming** (`NHD-120-TX...`, `NHD-120-RX...`) and RTI alias conventions (`INx-...`, `OUTx-...`).
 
+### Production freeze
+
+This codebase is **production-ready and frozen** (in use for months). Prefer **critical bugfixes only** — no feature work or refactors here. For new UI (e.g. reusing staff notes), copy from this tree into a new project rather than changing DriverTranslator. Tagged release: `v1.0-production`.
+
 ---
 
 ## Install (Ubuntu Server 24.04 LTS, no desktop)
